@@ -155,6 +155,9 @@ function searchAnnasArchive($q) {
 function inAnnasArchive($isbn) {
     $counts = searchAnnasArchive($isbn);
     $count = $counts->aarecords->value;
+    if ($count < 0) {
+        throw new UnexpectedResponseException($count);
+    }
     return $count !== 0;
 }
 
@@ -458,7 +461,7 @@ function pdfToText($path) {
         $cover = pdfCover($path);
         if ($cover) {
             $cmd = escape_command([
-                'tesseract', '-l', 'eng', $cover, '-'
+                'tesseract', '--psm', '11', $cover, '-'
             ]);
             $text .= `$cmd`;
         }
@@ -479,7 +482,7 @@ function pdfToText($path) {
         $back = pdfBackCover($path);
         if ($back) {
             $cmd = escape_command([
-                'tesseract', '-l', 'eng', $back, '-'
+                'tesseract', '--psm', '11', $back, '-'
             ]);
             $text .= `$cmd`;
 
@@ -562,7 +565,7 @@ function epubToText($path) {
                     $res = copy("zip://$path#$cover", $cover_path);
                     if ($res) {
                         $cmd = escape_command([
-                            'tesseract', '-l', 'eng', $cover_path, '-'
+                            'tesseract', '--psm', '11', $cover_path, '-'
                         ]);
                         $texts[] = `$cmd`;
                     }
@@ -616,13 +619,10 @@ function epubMetadata($path) {
 
 function getYearFromFile($path) {
     $txt = fileToText($path);
-    if (preg_match_all('~date>(20[012]\d)<~ui', $txt, $matches)) {
-        return max($matches[1]);
-    }
-    if (preg_match_all('~(Copyright (© )?|&#169; |\n© )(20[012]\d)~ui', $txt, $matches)) {
+    if (preg_match_all('~(Copyright (© )?|&#169; |\n© )(20[012]\d)~i', $txt, $matches)) {
         return max($matches[3]);
     }
-    if (preg_match_all('~&#x00A9; (20[012]\d) ~ui', $txt, $matches)) {
+    if (preg_match_all('~&#x00A9; (20[012]\d) ~i', $txt, $matches)) {
         return max($matches[1]);
     }
     return null;
@@ -637,7 +637,7 @@ function fixCase($str) {
 
 function getPublisherFromFile($path) {
     $txt = fileToText($path);
-    if (preg_match('~Copyright (© )?20[012]\d by (.*?),~ui', $txt, $matches)) {
+    if (preg_match('~Copyright (© )?20[012]\d by (.*?),~i', $txt, $matches)) {
         return $matches[2];
     }
     if (preg_match('~Published by (.*?) [–-] 20[012]\d~', $txt, $matches)) {
@@ -664,6 +664,7 @@ function getIssnFromFile($path) {
     if (preg_match_all('~ISSN ([0-9]{4}-[0-9]{3}[0-9X])~', $txt, $matches)) {
         return array_unique($matches[1]);
     }
+    return [];
 }
 
 function ebook_polish($epub) {
