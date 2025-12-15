@@ -360,6 +360,12 @@ function getLanguageCode($language) {
 }
 
 function fixMetadata($metadata) {
+    if (is_array($metadata['authors'])) {
+        $imploded = implode('; ', $metadata['authors']);
+        if (!str_contains($imploded, 'Array')) {
+            $metadata['authors'] = $imploded;
+        }
+    }
     if (!empty($metadata['authors'])) {
         $metadata['title'] = preg_replace($A = '~^' . preg_quote($metadata['authors'], '~') . '\s*:\s*~', '', $metadata['title']);
         $metadata['name'] = preg_replace($A = '~^' . preg_quote($metadata['authors'], '~') . '\s*:\s*~', '', $metadata['name'] ?? $metadata['title']);
@@ -458,6 +464,9 @@ function pdfToText($path) {
     $txt_path = str_replace('.pdf', '.txt', strtolower($path));
     if (!file_exists($txt_path)) {
         $text = '';
+
+        /*
+        // OCR the first page of the PDF
         $cover = pdfCover($path);
         if ($cover) {
             $cmd = escape_command([
@@ -465,6 +474,7 @@ function pdfToText($path) {
             ]);
             $text .= `$cmd`;
         }
+        */
 
         $cmd = escape_command([
             'pdftotext', '-f', '1', '-l', '6', '-nodiag', $path, '-'
@@ -481,11 +491,15 @@ function pdfToText($path) {
 
         $back = pdfBackCover($path);
         if ($back) {
+            // OCR the last page of the book
+            /*
             $cmd = escape_command([
                 'tesseract', '--psm', '11', $back, '-'
             ]);
             $text .= `$cmd`;
+            */
 
+            // Read any barcode on the back
             $cmd = escape_command([
                 'ZXingReader', '-bytes', '-single', $back
             ]);
@@ -553,6 +567,8 @@ function epubToText($path) {
         }
         $html = file_get_contents("zip://$path#$item");
 
+        /*
+        // OCR the first image in the epub
         if (empty($texts)) {
             $doc = parseHtml($html);
             $images = $doc->getElementsByTagName('img');
@@ -572,6 +588,7 @@ function epubToText($path) {
                 }
             }
         }
+        */
         
         $text = html_entity_decode(strip_tags($html));
         if (strlen($text) > 8000) {
@@ -584,6 +601,69 @@ function epubToText($path) {
     $text = implode("\n\n", $texts);
     atomic_file_put_contents($txt_path, $text);
     return $text;
+}
+
+function epubCover($path) {
+    if (!str_ends_with(strtolower($path), '.epub')) {
+        return false;
+    }
+
+    // Return existing image, if exists
+    $without_ext = str_replace('.epub', '', $path);
+    $exts = ['jpeg', 'jpg', 'png'];
+    foreach ($exts as $ext) {
+        $cover = "$without_ext.$ext";
+        if (is_file($cover)) {
+            return $cover;
+        }
+    }
+
+    $container_txt = file_get_contents("zip://$path#META-INF/container.xml");
+    if ($container_txt === false) {
+        return false;
+    }
+    $rootfile_path = (string)(new SimpleXMLElement($container_txt))->rootfiles->rootfile['full-path'];
+    $rootfile_txt = file_get_contents("zip://$path#$rootfile_path");
+    $rootfile_xml = new SimpleXMLElement($rootfile_txt);
+    $items = [];
+    foreach ($rootfile_xml->manifest->item as $item) {
+        $items[(string)$item['id']] = dirname($rootfile_path) . '/' . $item['href'];
+    }
+
+    // Take first chapter
+    $idref = (string)$rootfile_xml->spine->itemref[0]['idref'];
+    $item = $items[$idref];
+
+    if (str_starts_with($item, './')) {
+        $item = substr($item, 2);
+    }
+    $html = file_get_contents("zip://$path#$item");
+
+    $doc = parseHtml($html);
+    $images = $doc->getElementsByTagName('img');
+    if ($images->length) {
+        $cover = $images[0]->getAttribute('src');
+        if ($cover) {
+            $cover = getAbsoluteFilename(dirname($item) . '/' . $cover);
+            $extension = pathinfo($cover, PATHINFO_EXTENSION);
+            $cover_path = str_replace('.epub', ".$extension", strtolower($path));
+            $res = copy("zip://$path#$cover", $cover_path);
+            if ($res) {
+                return $cover_path;
+            }
+        }
+    }
+    return false;
+}
+
+function fileCoverImage($path) {
+    if (str_ends_with(strtolower($path), '.epub')) {
+        return epubCover($path);
+    }
+    if (str_ends_with(strtolower($path), '.pdf')) {
+        return pdfCover($path);
+    }
+    return false;
 }
 
 function epubMetadata($path) {
@@ -712,7 +792,7 @@ function crack_epub($epub_enc_path) {
 }
 
 function pdf2djvu($pdfpath) {
-    $djvupath = str_replace('.pdf', '.djvu', $pdfpath);
+    $djvupath = str_replace('.pdf', '.djvu', strtolower($pdfpath));
     $cmd = "pdf2djvu -o $djvupath $pdfpath";
     system($cmd, $result);
     if ($result !== 0 || !file_exists($djvupath)) {
@@ -729,7 +809,7 @@ function filesize_mib($path) {
 function reduce_file_size($path) {
     if (str_ends_with($path, '.epub')) {
         $command = escape_command(['reduce_epub_size.sh', $path]);
-    } else if (str_ends_with($path, '.pdf')) {
+    } else if (str_ends_with(strtolower($path), '.pdf')) {
         if (file_exists("$path.orig.pdf")) {
             echo "Looks already shrunk!\n";
             return true;
@@ -938,13 +1018,11 @@ function numberOfPages($path) {
 }
 
 function recursive_glob($dir, $pattern) {
-    return array_merge(
-        glob("$dir/$pattern"),
-        glob("$dir/*/$pattern"),
-        glob("$dir/*/*/*$pattern"),
-        glob("$dir/*/*/*/$pattern"),
-        glob("$dir/*/*/*/*/$pattern"),
-    );
+    $output = trim(`fdfind --glob '$pattern' '$dir'`);
+    if (empty($output)) {
+        return [];
+    }
+    return explode("\n", $output);
 }
 
 function readcsvs($dir) {
@@ -1013,7 +1091,7 @@ function fixEncoding($str) {
 }
 
 function pdfCover($path) {
-    if (!str_ends_with($path, '.pdf')) {
+    if (!str_ends_with(strtolower($path), '.pdf')) {
         throw new ValueError($path);
     }
 
@@ -1022,7 +1100,7 @@ function pdfCover($path) {
 
     if (!file_exists($png_path)) {
         $cmd = escape_command([
-            'pdftoppm', '-singlefile', '-cropbox', '-png', $path, $path_without_ext
+            'pdftoppm', '-singlefile', '-cropbox', '-r', '90', '-png', $path, $path_without_ext
         ]);
         passthru($cmd);
     }
@@ -1031,7 +1109,7 @@ function pdfCover($path) {
 }
 
 function pdfBackCover($path) {
-    if (!str_ends_with($path, '.pdf')) {
+    if (!str_ends_with(strtolower($path), '.pdf')) {
         throw new ValueError($path);
     }
 
