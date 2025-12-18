@@ -489,6 +489,25 @@ function pdfToText($path) {
             $text .= `$cmd`;
         }
 
+        // if (empty(trim($text))) {
+        if (!isLegible($text)) {
+            // pdftotext does not seem to work. Perhaps Hindi fonts?
+            // OCR the first page of the PDF
+            $cover = pdfCover($path);
+            if ($cover) {
+                $text = '';
+                $cmd = escape_command([
+                    'tesseract', '--psm', '11', '-l', 'eng', $cover, '-'
+                ]);
+                $text .= `$cmd`;
+
+                $cmd = escape_command([
+                    'tesseract', '--psm', '11', '-l', 'hin', $cover, '-'
+                ]);
+                $text .= `$cmd`;
+            }
+        }
+
         $back = pdfBackCover($path);
         if ($back) {
             // OCR the last page of the book
@@ -542,7 +561,14 @@ function epubToText($path) {
     }
     $rootfile_path = (string)(new SimpleXMLElement($container_txt))->rootfiles->rootfile['full-path'];
     $rootfile_txt = file_get_contents("zip://$path#$rootfile_path");
-    $rootfile_xml = new SimpleXMLElement($rootfile_txt);
+    
+    try {
+        $rootfile_xml = new SimpleXMLElement($rootfile_txt);
+    } catch (Exception $e) {
+        var_dump($e);
+        return '';
+    }
+
     $description = $rootfile_xml->metadata->description;
     $items = [];
     foreach ($rootfile_xml->manifest->item as $item) {
@@ -1100,7 +1126,7 @@ function pdfCover($path) {
 
     if (!file_exists($png_path)) {
         $cmd = escape_command([
-            'pdftoppm', '-singlefile', '-cropbox', '-r', '90', '-png', $path, $path_without_ext
+            'pdftoppm', '-singlefile', '-cropbox', '-r', '80', '-png', $path, $path_without_ext
         ]);
         passthru($cmd);
     }
@@ -1123,7 +1149,7 @@ function pdfBackCover($path) {
 
     if (!file_exists($png_path)) {
         $cmd = escape_command([
-            'pdftoppm', '-singlefile', '-cropbox', '-png', '-f', $pages, '-l', $pages, $path, $path_without_ext
+            'pdftoppm', '-singlefile', '-cropbox', '-r', '80', '-png', '-f', $pages, '-l', $pages, $path, $path_without_ext
         ]);
         passthru($cmd);
     }
