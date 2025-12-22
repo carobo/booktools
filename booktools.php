@@ -153,6 +153,10 @@ function searchAnnasArchive($q) {
 }
 
 function inAnnasArchive($isbn) {
+    if (hasIsbn($isbn)) {
+        return true;
+    }
+
     $counts = searchAnnasArchive($isbn);
     $count = $counts->aarecords->value;
     if ($count < 0) {
@@ -878,20 +882,31 @@ function zlibHasIsbn($isbn) {
 
 function hasMD5($md5_hex) {
     $md5_bin = hex2bin($md5_hex);
-    $binfile = 'md5.bin';
+    return binarySearch('md5.bin', $md5_bin, 16, 16);
+}
+
+function hasIsbn($isbn) {
+    return binarySearch('aa_isbns.txt', $isbn, 14, 13);
+}
+
+function isRequested($isbn) {
+    return binarySearch('zlib_requested.txt', $isbn, 14, 13);
+}
+
+function binarySearch($binfile, $isbn, $chunk_size, $match_size) {
     $size = filesize($binfile);
-    $count = $size / 16;
+    $count = $size / $chunk_size;
 
     $lower = 0;
     $upper = $count;
 
     $idx = (int)($count / 2);
 
-    $fp = fopen($binfile, "rb");
+    $fp = fopen($binfile, "r");
     while (true) {
-        fseek($fp, $idx * 16);
-        $candidate = fread($fp, 16);
-        $cmp = strcmp($candidate, $md5_bin);
+        fseek($fp, $idx * $chunk_size);
+        $candidate = fread($fp, $match_size);
+        $cmp = strcmp($candidate, $isbn);
         if ($cmp === 0) {
             return true;
         }
@@ -899,11 +914,11 @@ function hasMD5($md5_hex) {
             return false;
         }
         if ($cmp < 0) {
-            // $candidate < $md5_bin
+            // $candidate < $isbn
             $lower = $idx + 1;
         }
         if ($cmp > 0) {
-            // $candidate > $md5_bin
+            // $candidate > $isbn
             $upper = $idx;
         }
         $idx = (int)($lower + ($upper - $lower) / 2);

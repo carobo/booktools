@@ -367,3 +367,26 @@ function zlibInitializeCtoken() {
         throw new UnexpectedResponseException($response);
     }
 }
+
+function zlibGetRequestedBooks($page = 1) {
+    $fp = fopen('zlib_requested.txt', 'w');
+    while (true) {
+        echo "$page\n";
+        $url = "https://z-library.sk/requests?page=$page";
+        $response = zlibHttpRequest($url);
+        if (!preg_match_all('~isbn="([0-9]*[0-9X])"~', $response, $matches)) {
+            echo $response;
+            break;
+        }
+        foreach ($matches[1] as $isbn) {
+            if (strlen($isbn) != 13) {
+                $isbn = convertISBN10toISBN13($isbn);
+            }
+            if (strlen($isbn) == 13) {
+                fwrite($fp, "$isbn\n");
+            }
+        }
+        $page += 1;
+        sleep(2);
+    }
+}
