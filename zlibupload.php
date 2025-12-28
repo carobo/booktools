@@ -4,6 +4,21 @@ $_zlibSessionData = [
     'cookies' => [],
 ];
 
+function existsInZlib($isbns) {
+    if (is_string($isbns)) {
+        $isbns = [$isbns];
+    }
+    foreach ($isbns as $isbn) {
+        $result = zlibHttpRequest("https://z-library.sk/s/$isbn?e=1&selected_content_types%5B%5D=book");
+        if (preg_match('~Books&nbsp;\(([0-9]+)\)~', $result, $matches)) {
+            if ($matches[1] > 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 function zlibFtpCollection($id)
 {
     $url = "https://z-library.sk/papi/uploader/collection/$id/files";
@@ -262,6 +277,13 @@ function zlibUpload($path, &$metadata) {
         $metadata['issn'] = getIssnFromFile($path);
     }
 
+    if (preg_match('~/([0-9A-Fa-f]{32})\.~', $path, $matches)) {
+        $md5 = $matches[1];
+        if (existsInZlib($md5)) {
+            return true;
+        }
+    }
+
     // TODO temporary, to remove
     return zlibFtpUpload($path, $metadata);
 
@@ -351,6 +373,12 @@ function zlibHttpRequest($url, $postfields=null, $headers=[]) {
     ]);
 
     $response = curl_exec($ch);
+
+    $error = curl_error($ch);
+    if (!empty($error)) {
+        throw new UnexpectedResponseException($error);
+    }
+
     curl_close($ch);
     return $response;
 }

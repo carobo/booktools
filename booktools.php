@@ -130,17 +130,6 @@ function httpGet($url) {
     return $response;
 }
 
-function existsInZlib($isbns) {
-    foreach ($isbns as $isbn) { 
-        $result = httpGet("https://z-library.sk/s/$isbn?e=1&selected_content_types%5B%5D=book");
-        preg_match('~Books&nbsp;\(([0-9]+)\)~', $result, $matches);
-        if ($matches[1] > 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
 function searchAnnasArchive($q) {
     $url = 'https://annas-archive.org/dyn/search_counts?' . http_build_query(['q' => $q]);
     // $url = 'https://annas-archive.li/dyn/search_counts?' . http_build_query(['q' => $q]);
@@ -364,7 +353,7 @@ function getLanguageCode($language) {
 }
 
 function fixMetadata($metadata) {
-    if (is_array($metadata['authors'])) {
+    if (is_array($metadata['authors'] ?? null)) {
         $imploded = implode('; ', $metadata['authors']);
         if (!str_contains($imploded, 'Array')) {
             $metadata['authors'] = $imploded;
@@ -403,29 +392,29 @@ function cleanISBN($isbn) {
 }
 
 function fileToText($path) {
-    if (str_ends_with(strtolower($path), '.txt')) {
+    if (has_extension($path, 'txt')) {
         return file_get_contents($path);
     }
-    if (str_ends_with(strtolower($path), '.pdf')) {
+    if (has_extension($path, 'pdf')) {
         return pdfToText($path);
     }
-    if (str_ends_with(strtolower($path), '.epub')) {
+    if (has_extension($path, 'epub')) {
         return epubToText($path);
     }
-    if (str_ends_with(strtolower($path), '.djvu')) {
+    if (has_extension($path, 'djvu')) {
         return djvuToText($path);
     }
-    if (str_ends_with(strtolower($path), '.tar.gz')) {
+    if (has_extension($path, 'tar.gz')) {
         return targzToText($path);
     }
     throw new InvalidArgumentException($path);
 }
 
 function targzToText($path) {
-    if (!str_ends_with(strtolower($path), '.tar.gz')) {
+    if (!has_extension($path, 'tar.gz')) {
         return '';
     }
-    $txt_path = str_replace('.tar.gz', '.txt', strtolower($path));
+    $txt_path = replace_extension($path, 'txt');
     if (!file_exists($txt_path)) {
         $files = explode("\n", `tar -tzf "$path"`);
         $files = array_filter($files, function ($a) { return str_ends_with($a, '.txt'); });
@@ -452,7 +441,7 @@ function targzToText($path) {
 }
 
 function djvuToText($path) {
-    if (!str_ends_with(strtolower($path), '.djvu')) {
+    if (!has_extension($path, 'djvu')) {
         return '';
     }
     $cmd = escape_command([
@@ -461,11 +450,23 @@ function djvuToText($path) {
     return `$cmd`;
 }
 
+function has_extension($path, $ext) {
+    return str_ends_with(strtolower($path), ".$ext");
+}
+
+function replace_extension($path, $ext) {
+    $pos = strrpos($path, '.');
+    if ($pos !== false) {
+        $path = substr($path, 0, $pos);
+    }
+    return "$path.$ext";
+}
+
 function pdfToText($path) {
-    if (!str_ends_with(strtolower($path), '.pdf')) {
+    if (!has_extension($path, 'pdf')) {
         return '';
     }
-    $txt_path = str_replace('.pdf', '.txt', strtolower($path));
+    $txt_path = replace_extension($path, 'txt');
     if (!file_exists($txt_path)) {
         $text = '';
 
@@ -551,10 +552,10 @@ function pdfToText($path) {
 }
 
 function epubToText($path) {
-    if (!str_ends_with(strtolower($path), '.epub')) {
+    if (!has_extension($path, 'epub')) {
         return '';
     }
-    $txt_path = str_replace('.epub', '.txt', strtolower($path));
+    $txt_path = replace_extension($path, 'txt');
     if (file_exists($txt_path)) {
         return file_get_contents($txt_path);
     }
@@ -607,7 +608,7 @@ function epubToText($path) {
                 if ($cover) {
                     $cover = getAbsoluteFilename(dirname($item) . '/' . $cover);
                     $extension = pathinfo($cover, PATHINFO_EXTENSION);
-                    $cover_path = str_replace('.epub', ".$extension", strtolower($path));
+                    $cover_path = replace_extension($path, $extension);
                     $res = copy("zip://$path#$cover", $cover_path);
                     if ($res) {
                         $cmd = escape_command([
@@ -634,15 +635,14 @@ function epubToText($path) {
 }
 
 function epubCover($path) {
-    if (!str_ends_with(strtolower($path), '.epub')) {
+    if (!has_extension($path, 'epub')) {
         return false;
     }
 
     // Return existing image, if exists
-    $without_ext = str_replace('.epub', '', $path);
     $exts = ['jpeg', 'jpg', 'png'];
     foreach ($exts as $ext) {
-        $cover = "$without_ext.$ext";
+        $cover = replace_extension($path, $ext);
         if (is_file($cover)) {
             return $cover;
         }
@@ -676,7 +676,7 @@ function epubCover($path) {
         if ($cover) {
             $cover = getAbsoluteFilename(dirname($item) . '/' . $cover);
             $extension = pathinfo($cover, PATHINFO_EXTENSION);
-            $cover_path = str_replace('.epub', ".$extension", strtolower($path));
+            $cover_path = replace_extension($path, $extension);
             $res = copy("zip://$path#$cover", $cover_path);
             if ($res) {
                 return $cover_path;
@@ -687,17 +687,17 @@ function epubCover($path) {
 }
 
 function fileCoverImage($path) {
-    if (str_ends_with(strtolower($path), '.epub')) {
+    if (has_extension($path, 'epub')) {
         return epubCover($path);
     }
-    if (str_ends_with(strtolower($path), '.pdf')) {
+    if (has_extension($path, 'pdf')) {
         return pdfCover($path);
     }
     return false;
 }
 
 function epubMetadata($path) {
-    if (!str_ends_with(strtolower($path), '.epub')) {
+    if (!has_extension($path, 'epub')) {
         throw new ValueError($path);
     }
 
@@ -707,14 +707,18 @@ function epubMetadata($path) {
     $rootfile_xml = new SimpleXMLElement($rootfile_txt);
     $dc_elems = $rootfile_xml->metadata->children('http://purl.org/dc/elements/1.1/');
     $metadata = (array)$dc_elems;
-    $metadata['authors'] = $metadata['creator'];
-    if (is_array($metadata['authors'])) {
+    if (!empty($metadata['creator'])) {
+        $metadata['authors'] = $metadata['creator'];
+    }
+    if (isset($metadata['authors']) && is_array($metadata['authors'])) {
         $metadata['authors'] = implode('; ', $metadata['authors']);
     }
-    if (is_array($metadata['title'])) {
+    if (isset($metadata['title']) && is_array($metadata['title'])) {
         $metadata['title'] = implode(' - ', $metadata['title']);
     }
-    $metadata['isbn'] = $metadata['identifier'];
+    if (!empty($metadata['identifier'])) {
+        $metadata['isbn'] = $metadata['identifier'];
+    }
 
     while (is_array($metadata['language'])) {
         $metadata['language'] = $metadata['language'][0];
@@ -822,7 +826,7 @@ function crack_epub($epub_enc_path) {
 }
 
 function pdf2djvu($pdfpath) {
-    $djvupath = str_replace('.pdf', '.djvu', strtolower($pdfpath));
+    $djvupath = replace_extension($pdfpath, 'djvu');
     $cmd = "pdf2djvu -o $djvupath $pdfpath";
     system($cmd, $result);
     if ($result !== 0 || !file_exists($djvupath)) {
@@ -839,7 +843,7 @@ function filesize_mib($path) {
 function reduce_file_size($path) {
     if (str_ends_with($path, '.epub')) {
         $command = escape_command(['reduce_epub_size.sh', $path]);
-    } else if (str_ends_with(strtolower($path), '.pdf')) {
+    } else if (has_extension($path, 'pdf')) {
         if (file_exists("$path.orig.pdf")) {
             echo "Looks already shrunk!\n";
             return true;
@@ -1050,10 +1054,14 @@ function numberOfPages($path) {
         return $cache[$path];
     }
 
-    if (str_ends_with(strtolower($path), '.pdf')) {
+    if (has_extension($path, 'pdf')) {
         $pages = trim(`qpdf --show-npages $path`);
         $cache[$path] = $pages;
         return $pages;
+    }
+    if (has_extension($path, 'tar.gz')) {
+        $files = explode("\n", `tar -tzf "$path"`);
+        return count($files);
     }
     return null;
 }
@@ -1132,7 +1140,7 @@ function fixEncoding($str) {
 }
 
 function pdfCover($path) {
-    if (!str_ends_with(strtolower($path), '.pdf')) {
+    if (!has_extension($path, 'pdf')) {
         throw new ValueError($path);
     }
 
@@ -1150,7 +1158,7 @@ function pdfCover($path) {
 }
 
 function pdfBackCover($path) {
-    if (!str_ends_with(strtolower($path), '.pdf')) {
+    if (!has_extension($path, 'pdf')) {
         throw new ValueError($path);
     }
 
