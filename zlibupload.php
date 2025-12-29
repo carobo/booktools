@@ -379,6 +379,10 @@ function zlibHttpRequest($url, $postfields=null, $headers=[]) {
         throw new UnexpectedResponseException($error);
     }
 
+    if (str_contains($response, 'Wait a moment, checking your browser')) {
+        $_zlibSessionData['cookies']['c_token'] = null;
+    }
+
     curl_close($ch);
     return $response;
 }

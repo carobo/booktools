@@ -577,7 +577,7 @@ function epubToText($path) {
     $description = $rootfile_xml->metadata->description;
     $items = [];
     foreach ($rootfile_xml->manifest->item as $item) {
-        $items[(string)$item['id']] = dirname($rootfile_path) . '/' . $item['href'];
+        $items[(string)$item['id']] = dirname($rootfile_path) . '/' . urldecode($item['href']);
     }
 
     // Take first five and last chapter
@@ -657,7 +657,7 @@ function epubCover($path) {
     $rootfile_xml = new SimpleXMLElement($rootfile_txt);
     $items = [];
     foreach ($rootfile_xml->manifest->item as $item) {
-        $items[(string)$item['id']] = dirname($rootfile_path) . '/' . $item['href'];
+        $items[(string)$item['id']] = dirname($rootfile_path) . '/' . urldecode($item['href']);
     }
 
     // Take first chapter
@@ -1080,12 +1080,13 @@ function readcsvs($dir) {
     foreach ($csvs as $csv_path) {
         $fp = fopen($csv_path, 'r');
         $keys = fgetcsv($fp);
+        if ($keys === false) continue;
         $keys = array_map('strtolower', $keys);
         $ncols = count($keys);
         while ($row = fgetcsv($fp)) {
             $keyed = [];
             for ($i = 0; $i < $ncols; $i++) {
-                $keyed[$keys[$i]] = fixEncoding($row[$i]);
+                $keyed[$keys[$i]] = fixEncoding($row[$i] ?? null);
             }
             if (!empty($keyed['isbn13'])) {
                 $rows_by_isbn13[$keyed['isbn13']] = $keyed;
@@ -1133,6 +1134,7 @@ function readonixxmls($dir) {
 }
 
 function fixEncoding($str) {
+    if (empty($str)) return $str;
     if (!mb_check_encoding($str, 'UTF-8')) {
         $str = iconv('ISO-8859-1', 'UTF-8', $str);
     }
