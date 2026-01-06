@@ -127,10 +127,7 @@ function zlibSetMetadata($book, $metadata)
     }
 
     /* ISBN handling – may be a string or an array. */
-    $form['isbn'] = $metadata['isbn'];
-    if (!is_array($form['isbn'])) {
-        $form['isbn'] = explode(', ', $metadata['isbn']);
-    }
+    $form['isbn'] = mergeIsbnsArray($metadata['isbn']);
 
     /* Some metadata may contain ISSN values – merge them with the ISBNs. */
     if (!empty($metadata['issn']) && is_array($metadata['issn'])) {
@@ -225,15 +222,16 @@ function zlibFtpUpload($path, $metadata) {
     return $result;
 }
 
-function dotsleep() {
-    echo '.';
-    sleep(1);
-    echo '.';
-    sleep(1);
+function dotsleep($seconds = 2) {
+    for ($i = 0; $i < $seconds; $i++) {
+        echo '.';
+        sleep(1);
+    }
     echo '.';
 }
 
 function zlibWebUpload($path, $metadata) {
+    echo "Web upload to zlib... ";
     $book = zlibUploadFile($path);
     echo "Sending metadata to zlib.";
     dotsleep();
@@ -285,7 +283,7 @@ function zlibUpload($path, &$metadata) {
     }
 
     // TODO temporary, to remove
-    return zlibFtpUpload($path, $metadata);
+    // return zlibFtpUpload($path, $metadata);
 
     if (filesize($path) > 100000000) {
         return zlibFtpUpload($path, $metadata);
@@ -293,7 +291,7 @@ function zlibUpload($path, &$metadata) {
 
     try {
         return zlibWebUpload($path, $metadata);
-    } catch (UploadException $e) {
+    } catch (Exception $e) {
         var_dump($e);
         if (str_contains($e->getMessage(), 'This book already exist:')) {
             return true;
@@ -372,18 +370,24 @@ function zlibHttpRequest($url, $postfields=null, $headers=[]) {
         ...$headers,
     ]);
 
-    $response = curl_exec($ch);
+    if (!empty($postfields['file'])) {
+        ProgressBar::showFor($ch);
+    }
 
+    $response = curl_exec($ch);
     $error = curl_error($ch);
+    curl_close($ch);
+
     if (!empty($error)) {
         throw new UnexpectedResponseException($error);
     }
 
     if (str_contains($response, 'Wait a moment, checking your browser')) {
         $_zlibSessionData['cookies']['c_token'] = null;
+        // TODO throw exception when not coming from zlibInitializeCtoken?
+        // Perhaps only on POST?
     }
 
-    curl_close($ch);
     return $response;
 }
 

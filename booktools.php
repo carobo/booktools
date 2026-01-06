@@ -131,8 +131,8 @@ function httpGet($url) {
 }
 
 function searchAnnasArchive($q) {
-    $url = 'https://annas-archive.org/dyn/search_counts?' . http_build_query(['q' => $q]);
-    // $url = 'https://annas-archive.li/dyn/search_counts?' . http_build_query(['q' => $q]);
+    // $url = 'https://annas-archive.org/dyn/search_counts?' . http_build_query(['q' => $q]);
+    $url = 'https://annas-archive.li/dyn/search_counts?' . http_build_query(['q' => $q]);
     $response = httpGet($url);
     $decoded = json_decode($response);
     if (empty($response) || empty($decoded)) {
@@ -191,7 +191,8 @@ function mergeIsbns(...$parts) {
     $isbns = [];
     foreach ($parts as $part) {
         if (!is_array($part)) {
-            $part = explode(', ', $part);
+            $part = explode(',', $part);
+            $part = array_map('trim', $part);
         }
         $isbns = array_merge($isbns, $part);
     }
@@ -205,7 +206,8 @@ function mergeIsbnsArray(...$parts) {
     $isbns = [];
     foreach ($parts as $part) {
         if (!is_array($part)) {
-            $part = explode(', ', $part);
+            $part = explode(',', $part);
+            $part = array_map('trim', $part);
         }
         $isbns = array_merge($isbns, $part);
     }
@@ -372,11 +374,17 @@ function fixMetadata($metadata) {
     // if (empty($metadata['scan'])) {
     //     $metadata['scan'] = '0';
     // }
+    if (!empty($metadata['title']) && is_array($metadata['title'])) {
+        $metadata['title'] = array_shift($metadata['title']);
+    }
+    if (!empty($metadata['edition']) && is_array($metadata['edition'])) {
+        $metadata['edition'] = array_shift($metadata['edition']);
+    }
     if (empty($metadata['edition']) && preg_match('~\(([0-9]+)[a-z]{2} edition\)~i', $metadata['title'], $matches)) {
         $metadata['edition'] = $matches[1];
     }
     if (!empty($metadata['isbn'])) {
-        $metadata['isbn'] = cleanISBN($metadata['isbn']);
+        $metadata['isbn'] = mergeIsbns($metadata['isbn']);
     }
     if (empty($metadata['description']) && !empty($metadata['description_short'])) {
         $metadata['description'] = $metadata['description_short'];
@@ -640,7 +648,7 @@ function epubCover($path) {
     }
 
     // Return existing image, if exists
-    $exts = ['jpeg', 'jpg', 'png'];
+    $exts = ['png', 'jpeg', 'jpg'];
     foreach ($exts as $ext) {
         $cover = replace_extension($path, $ext);
         if (is_file($cover)) {
@@ -648,6 +656,14 @@ function epubCover($path) {
         }
     }
 
+    // gnome-epub-thumbnailer
+    $cover = replace_extension($path, 'png');
+    passthru("gnome-epub-thumbnailer -s 500 '$path' '$cover'");
+    if (filesize($cover)) {
+        return $cover;
+    }
+
+    // Take first image from epub
     $container_txt = file_get_contents("zip://$path#META-INF/container.xml");
     if ($container_txt === false) {
         return false;
@@ -717,7 +733,7 @@ function epubMetadata($path) {
         $metadata['title'] = implode(' - ', $metadata['title']);
     }
     if (!empty($metadata['identifier'])) {
-        $metadata['isbn'] = $metadata['identifier'];
+        $metadata['isbn'] = mergeIsbns($metadata['isbn'] ?? [], $metadata['identifier']);
     }
 
     while (is_array($metadata['language'])) {
