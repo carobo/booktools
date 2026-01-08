@@ -481,6 +481,7 @@ function pdfToText($path) {
         passthru($command);
 
         $text = file_get_contents($txt_path);
+        unlink($subset_path);
 
         $back = pdfBackCover($path);
         if ($back) {
