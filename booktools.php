@@ -374,12 +374,6 @@ function fixMetadata($metadata) {
     // if (empty($metadata['scan'])) {
     //     $metadata['scan'] = '0';
     // }
-    if (!empty($metadata['title']) && is_array($metadata['title'])) {
-        $metadata['title'] = array_shift($metadata['title']);
-    }
-    if (!empty($metadata['edition']) && is_array($metadata['edition'])) {
-        $metadata['edition'] = array_shift($metadata['edition']);
-    }
     if (empty($metadata['edition']) && preg_match('~\(([0-9]+)[a-z]{2} edition\)~i', $metadata['title'], $matches)) {
         $metadata['edition'] = $matches[1];
     }
@@ -396,7 +390,8 @@ function fixMetadata($metadata) {
 }
 
 function cleanISBN($isbn) {
-    return str_replace(['-', 'INK', ' ', '–'], ['', '978', '', ''], $isbn);
+    $isbn = str_replace('INK', '978', $isbn);
+    return preg_replace('~[^0-9Xx]~', '', $isbn);
 }
 
 function fileToText($path) {
@@ -1023,9 +1018,8 @@ function isValidISBN13(string $isbn): bool {
 }
 
 function parseHtml($formHtml) {
-    $formDoc = new DOMDocument();
     $old = error_reporting(E_ERROR | E_PARSE);
-    $formDoc->loadHTML('<meta charset="utf8">' . $formHtml);
+    $formDoc = \DOM\HTMLDocument::createFromString($formHtml, 0, 'UTF-8');
     error_reporting($old);
     return $formDoc;
 }
