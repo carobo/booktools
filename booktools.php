@@ -471,61 +471,19 @@ function pdfToText($path) {
     }
     $txt_path = replace_extension($path, 'txt');
     if (!file_exists($txt_path)) {
-        $text = '';
-
-        /*
-        // OCR the first page of the PDF
-        $cover = pdfCover($path);
-        if ($cover) {
-            $cmd = escape_command([
-                'tesseract', '--psm', '11', $cover, '-'
-            ]);
-            $text .= `$cmd`;
-        }
-        */
-
-        $cmd = escape_command([
-            'pdftotext', '-f', '1', '-l', '6', '-nodiag', $path, '-'
-        ]);
-        $text .= `$cmd`;
-
+        $subset_path = replace_extension($path, 'subset.pdf');
         $numPages = numberOfPages($path);
-        if ($numPages) {
-            $cmd = escape_command([
-                'pdftotext', '-f', $numPages, '-l', $numPages, '-nodiag', $path, '-'
-            ]);
-            $text .= `$cmd`;
-        }
 
-        // if (empty(trim($text))) {
-        if (!isLegible($text)) {
-            // pdftotext does not seem to work. Perhaps Hindi fonts?
-            // OCR the first page of the PDF
-            $cover = pdfCover($path);
-            if ($cover) {
-                $text = '';
-                $cmd = escape_command([
-                    'tesseract', '--psm', '11', '-l', 'eng', $cover, '-'
-                ]);
-                $text .= `$cmd`;
+        $command = "pdftk '$path' cat 1-6 $numPages output '$subset_path'";
+        passthru($command);
 
-                $cmd = escape_command([
-                    'tesseract', '--psm', '11', '-l', 'hin', $cover, '-'
-                ]);
-                $text .= `$cmd`;
-            }
-        }
+        $command = "ocrmypdf --output-type none --force-ocr --sidecar '$txt_path' '$subset_path' -";
+        passthru($command);
+
+        $text = file_get_contents($txt_path);
 
         $back = pdfBackCover($path);
         if ($back) {
-            // OCR the last page of the book
-            /*
-            $cmd = escape_command([
-                'tesseract', '--psm', '11', $back, '-'
-            ]);
-            $text .= `$cmd`;
-            */
-
             // Read any barcode on the back
             $cmd = escape_command([
                 'ZXingReader', '-bytes', '-single', $back
