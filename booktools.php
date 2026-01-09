@@ -583,11 +583,11 @@ function epubToText($path) {
         $items[(string)$item['id']] = dirname($rootfile_path) . '/' . urldecode($item['href']);
     }
 
-    // Take first five and last chapter
+    // Take first five and last three chapters
     $itemrefs = [];
     $count = count($rootfile_xml->spine->itemref);
     for ($i = 0; $i < $count; $i++) {
-        if ($i < 5 || $i === $count - 1) {
+        if ($i < 5 || $i >= $count - 3) {
             $itemrefs[] = $rootfile_xml->spine->itemref[$i];
         }
     }
@@ -625,9 +625,6 @@ function epubToText($path) {
         */
         
         $text = html_entity_decode(strip_tags($html));
-        if (strlen($text) > 8000) {
-            $text = substr($text, 0, 8000) . "...";
-        }
         $texts[] = $text;
     }
 
