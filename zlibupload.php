@@ -259,8 +259,9 @@ function zlibWebUpload($path, $metadata) {
 }
 
 function zlibUpload($path, &$metadata) {
-    // This was already done by uploaddirectory.php:
-    // $metadata['isbn'] = mergeIsbns($metadata['isbn'], getIsbnFromFile($path));
+    if (empty($metadata['isbn'])) {
+        $metadata['isbn'] = getIsbnFromFile($path);
+    }
 
     if (empty($metadata['year'])) {
         $metadata['year'] = getYearFromFile($path);

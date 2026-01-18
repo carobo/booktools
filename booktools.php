@@ -47,8 +47,10 @@ function httpSave($url) {
     $origin = "$scheme://$domain";
 
     $url_path = parse_url($url, PHP_URL_PATH);
+    if (empty($url_path) || str_ends_with($url_path, '/')) $url_path .= 'index.html';
     $dir = getSiteDirectory($domain);
     $output_path = "$dir/$url_path";
+    $tmp_path = "$output_path.tmp";
 
     if (file_exists($output_path)) {
         echo "File already exists: $output_path\n";
@@ -58,9 +60,9 @@ function httpSave($url) {
     $output_dir = dirname($output_path);
     if (!is_dir($output_dir)) mkdir($output_dir, 0777, true);
 
-    $fp = fopen($output_path, 'w');
+    $fp = fopen($tmp_path, 'w');
     if ($fp === false) {
-        throw new FileInputOutputException($output_path);
+        throw new FileInputOutputException($tmp_path);
     }
 
     $ch = curl_init($url);
@@ -80,20 +82,20 @@ function httpSave($url) {
     ]);
 
     $response = curl_exec($ch);
+    $http_status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    fclose($fp);
 
     // Check for any errors
     if (curl_errno($ch)) {
         throw new DownloadException(curl_error($ch));
     }
 
-    $http_status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     if ($http_status != 200) {
         throw new DownloadException($http_status);
     }
 
-    // Close the cURL session
-    curl_close($ch);
-    fclose($fp);
+    rename($tmp_path, $output_path);
     return $output_path;
 }
 
@@ -218,6 +220,9 @@ function mergeIsbnsArray(...$parts) {
 }
 
 function mergeMetadata($onix, $dbmeta) {
+    if (empty($dbmeta)) return $onix;
+    if (empty($onix)) return $dbmeta;
+    
     $metadata = array_merge($onix, $dbmeta);
     $metadata['isbn'] = mergeIsbns($onix['isbn'] ?? [], $dbmeta['isbn'] ?? []);
     return $metadata;
@@ -473,19 +478,8 @@ function pdfToText($path) {
     if (!file_exists($txt_path)) {
         $text = '';
 
-        /*
-        // OCR the first page of the PDF
-        $cover = pdfCover($path);
-        if ($cover) {
-            $cmd = escape_command([
-                'tesseract', '--psm', '11', $cover, '-'
-            ]);
-            $text .= `$cmd`;
-        }
-        */
-
         $cmd = escape_command([
-            'pdftotext', '-f', '1', '-l', '6', '-nodiag', $path, '-'
+            'pdftotext', '-f', '1', '-l', '11', '-nodiag', $path, '-'
         ]);
         $text .= `$cmd`;
 
@@ -497,35 +491,24 @@ function pdfToText($path) {
             $text .= `$cmd`;
         }
 
-        // if (empty(trim($text))) {
-        if (!isLegible($text)) {
-            // pdftotext does not seem to work. Perhaps Hindi fonts?
-            // OCR the first page of the PDF
-            $cover = pdfCover($path);
-            if ($cover) {
-                $text = '';
-                $cmd = escape_command([
-                    'tesseract', '--psm', '11', '-l', 'eng', $cover, '-'
-                ]);
-                $text .= `$cmd`;
+        if (empty(grepIsbns($text))) {
+            $subset_path = replace_extension($path, 'subset.pdf.tmp');
+            $subset_text = replace_extension($path, 'subset.pdf.txt');
 
-                $cmd = escape_command([
-                    'tesseract', '--psm', '11', '-l', 'hin', $cover, '-'
-                ]);
-                $text .= `$cmd`;
-            }
+            $command = "pdftk '$path' cat 1-11 $numPages output '$subset_path'";
+            passthru($command);
+
+            $command = "ocrmypdf -l 'eng+rus+deu+fra+kor+kaz+kir+lat' --output-type none --force-ocr --sidecar '$subset_text' '$subset_path' -";
+            passthru($command);
+
+            $text .= file_get_contents($subset_text);
+
+            unlink($subset_text);
+            unlink($subset_path);
         }
 
         $back = pdfBackCover($path);
         if ($back) {
-            // OCR the last page of the book
-            /*
-            $cmd = escape_command([
-                'tesseract', '--psm', '11', $back, '-'
-            ]);
-            $text .= `$cmd`;
-            */
-
             // Read any barcode on the back
             $cmd = escape_command([
                 'ZXingReader', '-bytes', '-single', $back
@@ -882,6 +865,20 @@ function asciiCleanup($title) {
     $title = iconv('UTF-8', 'ASCII//TRANSLIT', $title);
     $title = preg_replace('~[^0-9A-Za-z ]+~', '', $title);
     return $title;
+}
+
+function grepIsbns($txt) {
+    $isbns = [];
+    if (preg_match_all('~(9[ –-]?7[ –-]?[89][ –-]?[0-9 –-]{10,20})~i', $txt, $matches)) {
+        $isbns = mergeIsbnsArray($isbns, $matches[1]);
+    }
+    if (preg_match_all('~ISBN(.?1[03]|\D{0,15})?:?\s*(9(?:\D{0,4}[0-9X]){12}|\d(?:\D{0,4}[0-9X]){9})~i', $txt, $matches)) {
+        $isbns = mergeIsbnsArray($isbns, $matches[2]);
+    }
+    if (preg_match_all('~DOI: 10.[1-9][0-9.]{3,10}/(\d{10,13})~i', $txt, $matches)) {
+        $isbns = mergeIsbnsArray($isbns, $matches[1]);
+    }
+    return $isbns;
 }
 
 function zlibHasIsbn($isbn) {
