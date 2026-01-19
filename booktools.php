@@ -452,10 +452,42 @@ function djvuToText($path) {
     if (!has_extension($path, 'djvu')) {
         return '';
     }
+    $numpages = numberOfPages($path);
+
     $cmd = escape_command([
-        'djvutxt', '--page=1-8', $path
+        'djvutxt', "--page=1-8,$numpages", $path
     ]);
-    return `$cmd`;
+    $text = `$cmd`;
+
+    if (empty(grepIsbns($text))) {
+        $subset_path = replace_extension($path, 'subset.djvu.tmp');
+        $subset_text = replace_extension($path, 'subset.djvu.txt');
+
+        $command = "ddjvu -format=pdf -page=1-11,$numpages '$path' '$subset_path'";
+        passthru($command);
+
+        $command = "ocrmypdf -l 'eng' --output-type none --force-ocr --sidecar '$subset_text' '$subset_path' -";
+        passthru($command);
+
+        $text .= file_get_contents($subset_text);
+
+        unlink($subset_text);
+        unlink($subset_path);
+    }
+
+    $back = djvuBackCover($path);
+    if ($back) {
+        // Read any barcode on the back
+        $cmd = escape_command([
+            'ZXingReader', '-bytes', '-single', $back
+        ]);
+        $barcode = `$cmd`;
+        if ($barcode) {
+            $text .= "\n$barcode\n";
+        }
+    }
+
+    return $text;
 }
 
 function has_extension($path, $ext) {
@@ -1059,13 +1091,18 @@ function numberOfPages($path) {
     }
 
     if (has_extension($path, 'pdf')) {
-        $pages = trim(`qpdf --show-npages $path`);
+        $pages = trim(`qpdf --show-npages "$path"`);
         $cache[$path] = $pages;
         return $pages;
     }
     if (has_extension($path, 'tar.gz')) {
         $files = explode("\n", `tar -tzf "$path"`);
         return count($files);
+    }
+    if (has_extension($path, 'djvu')) {
+        $pages = trim(`djvused -e n "$path"`);
+        $cache[$path] = $pages;
+        return $pages;
     }
     return null;
 }
@@ -1146,6 +1183,9 @@ function fixEncoding($str) {
 }
 
 function pdfCover($path) {
+    $page1 = dirname($path) . "/pages/1.jpg";
+    if (file_exists($page1)) return $page1;
+    
     if (!has_extension($path, 'pdf')) {
         throw new ValueError($path);
     }
@@ -1173,6 +1213,9 @@ function pdfBackCover($path) {
         return null;
     }
 
+    $lastpage = dirname($path) . "/pages/$pages.jpg";
+    if (file_exists($lastpage)) return $lastpage;
+
     $path_without_ext = substr($path, 0, -4) . ".back";
     $png_path = "$path_without_ext.png";
 
@@ -1184,6 +1227,28 @@ function pdfBackCover($path) {
     }
 
     return $png_path;
+}
+
+function djvuBackCover($path) {
+    if (!has_extension($path, 'djvu')) {
+        throw new ValueError($path);
+    }
+
+    $pages = numberOfPages($path);
+    if (empty($pages)) {
+        return null;
+    }
+
+    $ppm_path = replace_extension($path, 'back.ppm');
+
+    if (!file_exists($ppm_path)) {
+        $cmd = escape_command([
+            'ddjvu', '-format=ppm', "-page=$pages", $path, $ppm_path
+        ]);
+        passthru($cmd);
+    }
+
+    return $ppm_path;
 }
 
 // from https://stackoverflow.com/a/39796579
