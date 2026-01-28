@@ -30,7 +30,6 @@ function uploadFile($path) {
 
     curl_exec($ch);
     $redirect_url = curl_getinfo($ch, CURLINFO_REDIRECT_URL);
-    curl_close($ch);
     return $redirect_url;
 }
 
@@ -58,7 +57,6 @@ function formSubmitMetadata($url, $metadata) {
     ]);
     curl_exec($ch);
     $redirect_url = curl_getinfo($ch, CURLINFO_REDIRECT_URL);
-    curl_close($ch);
     return $redirect_url;
 }
 
@@ -90,7 +88,6 @@ function lgpSubmitMetadata($ftp_path, $metadata) {
         "Cookie: phpbb3_9na6l_u=1602; phpbb3_9na6l_k=; phpbb3_9na6l_sid=$lgp_session_id",
     ]);
     $formHtml = curl_exec($ch);
-    curl_close($ch);
 
     if (empty($formHtml)) {
         throw new UploadException("empty form");
@@ -138,7 +135,6 @@ function lgpSubmitMetadata($ftp_path, $metadata) {
         "Cookie: phpbb3_9na6l_sid=$lgp_session_id",
     ]);
     $response = curl_exec($ch);
-    curl_close($ch);
 
     if (preg_match_all('~<div class="alert alert-danger" role="alert">([^<]*)</div>~', $response, $matches)) {
         if (isset($matches[1][1])) var_dump($matches[1][1]);

@@ -79,11 +79,11 @@ function httpSave($url) {
         'Client-IP: ' . random_ip(),
         'X-Forwarded-For: ' . random_ip(),
         "Cookie: device_data=1-2-3",
+        "User-Agent: Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:146.0) Gecko/20100101 Firefox/146.0",
     ]);
 
     $response = curl_exec($ch);
     $http_status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
     fclose($fp);
 
     // Check for any errors
@@ -99,7 +99,7 @@ function httpSave($url) {
     return $output_path;
 }
 
-function httpGet($url) {
+function httpGet($url, $postfields=null) {
     $domain = parse_url($url, PHP_URL_HOST);
     $scheme = parse_url($url, PHP_URL_SCHEME);
     $origin = "$scheme://$domain";
@@ -111,6 +111,10 @@ function httpGet($url) {
     curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    if (!empty($postfields)) {
+        curl_setopt($ch, CURLOPT_POST, 1);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $postfields);
+    }
     // curl_setopt($ch, CURLOPT_HEADER, 1); // include headers in response
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
         "Host: $domain",
@@ -127,8 +131,6 @@ function httpGet($url) {
         throw new DownloadException(curl_error($ch));
     }
 
-    // Close the cURL session
-    curl_close($ch);
     return $response;
 }
 
@@ -219,13 +221,21 @@ function mergeIsbnsArray(...$parts) {
     return $isbns;
 }
 
-function mergeMetadata($onix, $dbmeta) {
-    if (empty($dbmeta)) return $onix;
-    if (empty($onix)) return $dbmeta;
-    
-    $metadata = array_merge($onix, $dbmeta);
-    $metadata['isbn'] = mergeIsbns($onix['isbn'] ?? [], $dbmeta['isbn'] ?? []);
-    return $metadata;
+function mergeMetadata(...$metadatas) {
+    $result = [];
+    foreach ($metadatas as $meta_in) {
+        foreach ($meta_in as $key => $value) {
+            if (!empty($value)) {
+                if ($key === 'isbn') {
+                    $result['isbn'] = mergeIsbns($result['isbn'], $value);
+                } else {
+                    $result[$key] = $value;
+                }
+            }
+        }
+    }
+    $result['authors'] = $result['author'] = $result['authors'] ?? $result['author'];
+    return $result;
 }
 
 function normalizeCase($str) {
@@ -452,6 +462,12 @@ function djvuToText($path) {
     if (!has_extension($path, 'djvu')) {
         return '';
     }
+
+    $txt_path = replace_extension($path, 'txt');
+    if (file_exists($txt_path)) {
+        return file_get_contents($txt_path);
+    }
+
     $numpages = numberOfPages($path);
 
     $cmd = escape_command([
@@ -466,7 +482,7 @@ function djvuToText($path) {
         $command = "ddjvu -format=pdf -page=1-11,$numpages '$path' '$subset_path'";
         passthru($command);
 
-        $command = "ocrmypdf -l 'eng' --output-type none --force-ocr --sidecar '$subset_text' '$subset_path' -";
+        $command = "ocrmypdf --jobs 2 -l 'eng' --output-type none --force-ocr --sidecar '$subset_text' '$subset_path' -";
         passthru($command);
 
         $text .= file_get_contents($subset_text);
@@ -487,6 +503,7 @@ function djvuToText($path) {
         }
     }
 
+    file_put_contents($txt_path, $text);
     return $text;
 }
 
@@ -527,10 +544,18 @@ function pdfToText($path) {
             $subset_path = replace_extension($path, 'subset.pdf.tmp');
             $subset_text = replace_extension($path, 'subset.pdf.txt');
 
-            $command = "pdftk '$path' cat 1-11 $numPages output '$subset_path'";
+            // $command = "pdftk '$path' cat 1-11 $numPages output '$subset_path'";
+            $command = escape_command([
+                "pdftk", $path, 'cat', '1-11', $numPages, 'output', $subset_path
+            ]);
             passthru($command);
 
-            $command = "ocrmypdf -l 'eng+rus+deu+fra+kor+kaz+kir+lat' --output-type none --force-ocr --sidecar '$subset_text' '$subset_path' -";
+            // $command = "ocrmypdf -l 'eng+rus+deu+fra+kor+kaz+kir+lat' --output-type none --force-ocr --sidecar '$subset_text' '$subset_path' -";
+            $languages = 'eng+rus+deu+fra+kor+kaz+kir+mon';
+            // $languages = 'eng';
+            $command = escape_command([
+                "ocrmypdf", '--jobs', '2', '-l', $languages, '--output-type', 'none', '--force-ocr', '--sidecar', $subset_text, $subset_path, "-"
+            ]);
             passthru($command);
 
             $text .= file_get_contents($subset_text);

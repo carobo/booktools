@@ -5,11 +5,13 @@ $_zlibSessionData = [
 ];
 
 function existsInZlib($isbns) {
+    $zlibHost = ZLIB_HOST;
+
     if (is_string($isbns)) {
         $isbns = [$isbns];
     }
     foreach ($isbns as $isbn) {
-        $result = zlibHttpRequest("https://z-library.sk/s/$isbn?e=1&selected_content_types%5B%5D=book");
+        $result = zlibHttpRequest("https://$zlibHost/s/$isbn?e=1&selected_content_types%5B%5D=book");
         if (preg_match('~Books&nbsp;\(([0-9]+)\)~', $result, $matches)) {
             if ($matches[1] > 0) {
                 return true;
@@ -21,7 +23,8 @@ function existsInZlib($isbns) {
 
 function zlibFtpCollection($id)
 {
-    $url = "https://z-library.sk/papi/uploader/collection/$id/files";
+    $zlibHost = ZLIB_HOST;
+    $url = "https://$zlibHost/papi/uploader/collection/$id/files";
 
     $files       = [];
     $page        = 1;
@@ -64,8 +67,9 @@ function zlibFtpCollection($id)
 
 function zlibConfirm($book)
 {
+    $zlibHost = ZLIB_HOST;
     $id  = $book->id;
-    $url = "https://z-library.sk/papi/book-temporary/{$id}/confirm";
+    $url = "https://$zlibHost/papi/book-temporary/{$id}/confirm";
 
     $postfields = [
         'content_type' => 'book',
@@ -77,6 +81,8 @@ function zlibConfirm($book)
 
 function zlibUploadCover($path, $book)
 {
+    $zlibHost = ZLIB_HOST;
+
     // Only PDF files may be turned into a PNG cover.
     if (!str_ends_with($path, '.pdf')) {
         return false;
@@ -87,7 +93,7 @@ function zlibUploadCover($path, $book)
 
     // Build the request payload.
     $id  = $book->id;
-    $url = "https://z-library.sk/papi/book-temporary/{$id}/cover";
+    $url = "https://$zlibHost/papi/book-temporary/{$id}/cover";
     $data = [
         'cover' => new CURLFile($png_path)   // multipart upload
     ];
@@ -104,6 +110,8 @@ function zlibUploadCover($path, $book)
 
 function zlibSetMetadata($book, $metadata)
 {
+    $zlibHost = ZLIB_HOST;
+
     /* ------------------------------------------------------------------
      * 1  Build the form payload
      * ------------------------------------------------------------------ */
@@ -142,7 +150,7 @@ function zlibSetMetadata($book, $metadata)
     /* ------------------------------------------------------------------
      * 2  Make the request
      * ------------------------------------------------------------------ */
-    $url = "https://z-library.sk/papi/book-temporary/{$book->id}";
+    $url = "https://$zlibHost/papi/book-temporary/{$book->id}";
     $response = zlibHttpRequest($url, http_build_query($form));
 
     /* ------------------------------------------------------------------
@@ -158,7 +166,8 @@ function zlibSetMetadata($book, $metadata)
 
 function zlibSetFromMeta($book)
 {
-    $url = "https://z-library.sk/papi/book-temporary/{$book->id}/set-from-meta";
+    $zlibHost = ZLIB_HOST;
+    $url = "https://$zlibHost/papi/book-temporary/{$book->id}/set-from-meta";
 
     // Let the helper do all the cURL plumbing.
     $response = zlibHttpRequest($url);
@@ -174,7 +183,8 @@ function zlibSetFromMeta($book)
 
 function zlibUploadFile($path)
 {
-    $url  = 'https://z-library.sk/papi/book-temporary/upload';
+    $zlibHost = ZLIB_HOST;
+    $url  = "https://$zlibHost/papi/book-temporary/upload";
     $data = ['file' => new CURLFile($path)];
 
     // Delegate the cURL call to the helper.
@@ -190,11 +200,12 @@ function zlibUploadFile($path)
 
 function zlibMetadataFromIsbn($book)
 {
+    $zlibHost = ZLIB_HOST;
     $decoded = null;                     // keep the last response (or null)
     $isbns   = explode(',', $book->identifier);
 
     foreach ($isbns as $isbn) {
-        $url  = "https://z-library.sk/papi/book-meta/fetch-by-isbn/{$isbn}";
+        $url  = "https://$zlibHost/papi/book-meta/fetch-by-isbn/{$isbn}";
         $data = ['bookId' => $book->id]; // POST body
 
         // Delegate the cURL call to the helper.
@@ -302,7 +313,7 @@ function zlibUpload($path, &$metadata) {
 }
 
 function zlibFormValues($book_id) {
-    $url = "https://z-library.sk/layer/_modals/book_temporary_edit_dialog?id=$book_id";
+    $url = "https://$zlibHost/layer/_modals/book_temporary_edit_dialog?id=$book_id";
     return getFormValues(httpGet($url));
 }
 
@@ -341,6 +352,7 @@ function _zlibHandleHeaders($curlHandle, $headerData) {
 
 function zlibHttpRequest($url, $postfields=null, $headers=[]) {
     global $_zlibSessionData;
+    $zlibHost = ZLIB_HOST;
 
     if (empty($_zlibSessionData['cookies']['c_token'])) {
         $_zlibSessionData['cookies']['c_token'] = '1'; // prevent recursive loop
@@ -363,9 +375,9 @@ function zlibHttpRequest($url, $postfields=null, $headers=[]) {
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_HEADERFUNCTION, '_zlibHandleHeaders');
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        "Host: z-library.sk",
-        "Origin: https://z-library.sk",
-        "Referer: https://z-library.sk/",
+        "Host: $zlibHost",
+        "Origin: https://$zlibHost",
+        "Referer: https://$zlibHost/",
         "Cookie: " . implode('; ', $cookies),
         "User-Agent: Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:146.0) Gecko/20100101 Firefox/146.0",
         ...$headers,
@@ -377,7 +389,6 @@ function zlibHttpRequest($url, $postfields=null, $headers=[]) {
 
     $response = curl_exec($ch);
     $error = curl_error($ch);
-    curl_close($ch);
 
     if (!empty($error)) {
         throw new UnexpectedResponseException($error);
@@ -394,7 +405,8 @@ function zlibHttpRequest($url, $postfields=null, $headers=[]) {
 
 function zlibInitializeCtoken() {
     global $_zlibSessionData;
-    $response = zlibHttpRequest('https://z-library.sk/');
+    $zlibHost = ZLIB_HOST;
+    $response = zlibHttpRequest("https://$zlibHost/");
     if (preg_match("~const a0_0x2a54=\['([0-9A-F]+)','c_token='~", $response, $matches)) {
         $challenge = $matches[1];
         $token = calculate_ctoken($challenge);
@@ -406,10 +418,11 @@ function zlibInitializeCtoken() {
 }
 
 function zlibGetRequestedBooks($page = 1) {
+    $zlibHost = ZLIB_HOST;
     $fp = fopen('zlib_requested.txt', 'w');
     while (true) {
         echo "$page\n";
-        $url = "https://z-library.sk/requests?page=$page";
+        $url = "https://$zlibHost/requests?page=$page";
         $response = zlibHttpRequest($url);
         if (!preg_match_all('~isbn="([0-9]*[0-9X])"~', $response, $matches)) {
             echo $response;
