@@ -41,7 +41,7 @@ function stripXML($response) {
     return preg_replace('~<\?xml version=.*~s', '', $response);
 }
 
-function httpSave($url) {
+function httpSave($url, $postfields=null, $headers=[]) {
     $domain = parse_url($url, PHP_URL_HOST);
     $scheme = parse_url($url, PHP_URL_SCHEME);
     $origin = "$scheme://$domain";
@@ -71,6 +71,10 @@ function httpSave($url) {
     curl_setopt($ch, CURLOPT_FILE, $fp);
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    if (!empty($postfields)) {
+        curl_setopt($ch, CURLOPT_POST, 1);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $postfields);
+    }
     // curl_setopt($ch, CURLOPT_HEADER, 1); // include headers in response
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
         "Host: $domain",
@@ -78,8 +82,8 @@ function httpSave($url) {
         "Referer: $origin",
         'Client-IP: ' . random_ip(),
         'X-Forwarded-For: ' . random_ip(),
-        "Cookie: device_data=1-2-3",
         "User-Agent: Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:146.0) Gecko/20100101 Firefox/146.0",
+        ...$headers
     ]);
 
     $response = curl_exec($ch);
@@ -227,7 +231,7 @@ function mergeMetadata(...$metadatas) {
         foreach ($meta_in as $key => $value) {
             if (!empty($value)) {
                 if ($key === 'isbn') {
-                    $result['isbn'] = mergeIsbns($result['isbn'], $value);
+                    $result['isbn'] = mergeIsbns($result['isbn'] ?? [], $value);
                 } else {
                     $result[$key] = $value;
                 }
@@ -389,7 +393,7 @@ function fixMetadata($metadata) {
     // if (empty($metadata['scan'])) {
     //     $metadata['scan'] = '0';
     // }
-    if (empty($metadata['edition']) && preg_match('~\(([0-9]+)[a-z]{2} edition\)~i', $metadata['title'], $matches)) {
+    if (empty($metadata['edition']) && preg_match('~\(([0-9]+)[a-z]{2} edition\)~i', (string) $metadata['title'], $matches)) {
         $metadata['edition'] = $matches[1];
     }
     if (!empty($metadata['isbn'])) {
@@ -475,7 +479,7 @@ function djvuToText($path) {
     ]);
     $text = `$cmd`;
 
-    if (empty(grepIsbns($text))) {
+    if (PERFORM_OCR && empty(grepIsbns($text))) {
         $subset_path = replace_extension($path, 'subset.djvu.tmp');
         $subset_text = replace_extension($path, 'subset.djvu.txt');
 
@@ -540,14 +544,20 @@ function pdfToText($path) {
             $text .= `$cmd`;
         }
 
-        if (empty(grepIsbns($text))) {
+        if (PERFORM_OCR && empty(grepIsbns($text))) {
             $subset_path = replace_extension($path, 'subset.pdf.tmp');
             $subset_text = replace_extension($path, 'subset.pdf.txt');
 
             // $command = "pdftk '$path' cat 1-11 $numPages output '$subset_path'";
-            $command = escape_command([
-                "pdftk", $path, 'cat', '1-11', $numPages, 'output', $subset_path
-            ]);
+            if ($numPages) {
+                $command = escape_command([
+                    "pdftk", $path, 'cat', '1-11', $numPages, 'output', $subset_path
+                ]);
+            } else {
+                $command = escape_command([
+                    "pdftk", $path, 'cat', '1-11', 'output', $subset_path
+                ]);
+            }
             passthru($command);
 
             // $command = "ocrmypdf -l 'eng+rus+deu+fra+kor+kaz+kir+lat' --output-type none --force-ocr --sidecar '$subset_text' '$subset_path' -";
@@ -609,15 +619,19 @@ function epubToText($path) {
     }
     $rootfile_path = (string)(new SimpleXMLElement($container_txt))->rootfiles->rootfile['full-path'];
     $rootfile_txt = file_get_contents("zip://$path#$rootfile_path");
-    
+    if (empty($rootfile_txt)) return false;
+
     try {
         $rootfile_xml = new SimpleXMLElement($rootfile_txt);
+        if (empty($rootfile_xml->manifest)) {
+            $without_ns = preg_replace('~<(/?)[a-z]+:~', '<\1', $rootfile_txt);
+            $rootfile_xml = new SimpleXMLElement($without_ns);
+        }
     } catch (Exception $e) {
         var_dump($e);
         return '';
     }
 
-    $description = $rootfile_xml->metadata->description;
     $items = [];
     foreach ($rootfile_xml->manifest->item as $item) {
         $items[(string)$item['id']] = dirname($rootfile_path) . '/' . urldecode($item['href']);
@@ -625,7 +639,7 @@ function epubToText($path) {
 
     // Take first five and last three chapters
     $itemrefs = [];
-    $count = count($rootfile_xml->spine->itemref);
+    $count = count($rootfile_xml->spine->itemref ?? []);
     for ($i = 0; $i < $count; $i++) {
         if ($i < 5 || $i >= $count - 3) {
             $itemrefs[] = $rootfile_xml->spine->itemref[$i];
@@ -992,6 +1006,7 @@ function binarySearch($binfile, $isbn, $chunk_size, $match_size) {
 }
 
 function isValidISBN(string $isbn) {
+    if (empty($isbn)) return false;
     return isValidISBN13($isbn) || isValidISBN10($isbn);
 }
 
@@ -1133,7 +1148,7 @@ function numberOfPages($path) {
 }
 
 function recursive_glob($dir, $pattern) {
-    $output = trim(`fdfind --glob '$pattern' '$dir'`);
+    $output = trim(`fdfind --type file --glob '$pattern' '$dir'`);
     if (empty($output)) {
         return [];
     }
@@ -1373,4 +1388,30 @@ function atomic_file_put_contents($path, $data) {
         return false;
     }
     return rename($tmp_path, $path);
+}
+
+function isValidFile($path) {
+    $return_var = null;
+    $output = null;
+
+    if (!is_file($path)) {
+        return false;
+    }
+
+    if (has_extension($path, 'txt')) {
+        return (bool) filesize($path);
+    }
+    if (has_extension($path, 'pdf')) {
+        exec(escape_command(['pdfinfo', $path]), $output, $return_var);
+        return $return_var == 0;
+    }
+    if (has_extension($path, 'epub')) {
+        exec(escape_command(['unzip', '-l', $path, 'META-INF/container.xml']), $output, $return_var);
+        return $return_var == 0;
+    }
+    if (has_extension($path, 'djvu')) {
+        exec(escape_command(['djvutxt', '--page', '1', $path]), $output, $return_var);
+        return $return_var == 0;
+    }
+    throw new InvalidArgumentException($path);
 }
