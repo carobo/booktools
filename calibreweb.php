@@ -17,6 +17,7 @@ while (true) {
         $basedir = dirname($path);
         $html = file_get_contents($path);
         $isbns = grepIsbns($html);
+        if (empty($isbns)) continue;
 
         foreach ($isbns as $isbn) {
             if (zlibHasIsbn($isbn) || inAnnasArchive($isbn)) {
@@ -28,8 +29,7 @@ while (true) {
         $title = $dom->querySelector('h2#title')->textContent;
         $author = $dom->querySelector('p.author a:first-child')->textContent;
 
-        $search = "$title $author";
-        $search = preg_replace('~[0-9-]+~', '', $search);
+        $search = cleanupSearchQuery("$title $author");
         if (str_contains($title, 'z-lib') || inAnnasArchive($search)) {
             continue;
         }
@@ -44,10 +44,7 @@ while (true) {
 
         $isbn = $isbns[0] ?? '';
         foreach ($exts as $ext) {
-            $filename = "$id $isbn $title - $author.$ext";
-            if (strlen($filename) > 250) {
-                $filename = "$id $isbn $title.$ext";
-            }
+            $filename = createFileName($id, $isbn, $title, $author, $ext);
             $filepath = "$basedir/$filename";
             
 
@@ -59,7 +56,7 @@ while (true) {
                 echo "Downloading $download_url to $filepath...";
                 try {
                     $saved = httpSave($download_url, null, ['X-Requested-With: XMLHttpRequest']);
-                    link($saved, $filepath);
+                    rename($saved, $filepath);
                     echo " success.\n";
                     $errors = 0;
                     break;

@@ -414,50 +414,73 @@ function cleanISBN($isbn) {
 }
 
 function fileToText($path) {
-    if (has_extension($path, 'txt')) {
-        return file_get_contents($path);
+    $txt_path = replace_extension($path, 'txt');
+    if (file_exists($txt_path)) {
+        return file_get_contents($txt_path);
     }
-    if (has_extension($path, 'pdf')) {
-        return pdfToText($path);
+
+    $extension = pathinfo($path, PATHINFO_EXTENSION);
+    $function = $extension . 'ToText';  // pdfToText etc.
+    if (function_exists($function)) {
+        $text = $function($path);
+        atomic_file_put_contents($txt_path, $text);
+        return $text;
     }
-    if (has_extension($path, 'epub')) {
-        return epubToText($path);
-    }
-    if (has_extension($path, 'djvu')) {
-        return djvuToText($path);
-    }
-    if (has_extension($path, 'tar.gz')) {
-        return targzToText($path);
-    }
+
     throw new InvalidArgumentException($path);
+}
+
+function azwCover($path) {
+    return mobiCover($path);
+}
+
+function azwToText($path) {
+    return mobiToText($path);
+}
+
+function azw3Cover($path) {
+    return mobiCover($path);
+}
+
+function azw3ToText($path) {
+    return mobiToText($path);
+}
+
+function mobiCover($path) {
+    $cmd = escape_command(['mobitool', '-c', $path]);
+    $output = `$cmd`;
+    if (!preg_match('~Saving cover to (.*)~', $output, $matches)) {
+        return false;
+    }
+    return $matches[1];
+}
+
+function mobiToText($path) {
+    $cmd = escape_command(['mobitool', $path]);
+    return `$cmd`;
 }
 
 function targzToText($path) {
     if (!has_extension($path, 'tar.gz')) {
         return '';
     }
-    $txt_path = replace_extension($path, 'txt');
-    if (!file_exists($txt_path)) {
-        $files = explode("\n", `tar -tzf "$path"`);
-        $files = array_filter($files, function ($a) { return str_ends_with($a, '.txt'); });
-        usort($files, function ($a, $b) {
-            $am = preg_match('~(\d+).txt~', $a, $amatches);
-            $bm = preg_match('~(\d+).txt~', $b, $bmatches);
-            if ($am && $bm) {
-                return ((int)$amatches[1]) <=> ((int)$bmatches[1]);
-            }
-            return $a <=> $b;
-        });
-        $text = '';
-        for ($i = 0; $i < count($files); $i++) {
-            if ($i <= 11 || $i == count($files) - 1) {
-                $file = $files[$i];
-                $text .= `tar -xzOf "$path" "$file"`;
-            }
+
+    $files = explode("\n", `tar -tzf "$path"`);
+    $files = array_filter($files, function ($a) { return str_ends_with($a, '.txt'); });
+    usort($files, function ($a, $b) {
+        $am = preg_match('~(\d+).txt~', $a, $amatches);
+        $bm = preg_match('~(\d+).txt~', $b, $bmatches);
+        if ($am && $bm) {
+            return ((int)$amatches[1]) <=> ((int)$bmatches[1]);
         }
-        atomic_file_put_contents($txt_path, $text);
-    } else {
-        $text = file_get_contents($txt_path);
+        return $a <=> $b;
+    });
+    $text = '';
+    for ($i = 0; $i < count($files); $i++) {
+        if ($i <= 11 || $i == count($files) - 1) {
+            $file = $files[$i];
+            $text .= `tar -xzOf "$path" "$file"`;
+        }
     }
     return $text;
 }
@@ -465,11 +488,6 @@ function targzToText($path) {
 function djvuToText($path) {
     if (!has_extension($path, 'djvu')) {
         return '';
-    }
-
-    $txt_path = replace_extension($path, 'txt');
-    if (file_exists($txt_path)) {
-        return file_get_contents($txt_path);
     }
 
     $numpages = numberOfPages($path);
@@ -505,10 +523,129 @@ function djvuToText($path) {
         if ($barcode) {
             $text .= "\n$barcode\n";
         }
+        unlink($back);
     }
 
-    file_put_contents($txt_path, $text);
     return $text;
+}
+
+function cbzCover(string $cbzPath): string {
+    $zip = new ZipArchive();
+    if ($zip->open($cbzPath) !== true) {
+        throw new Exception("Failed to open CBZ archive: $cbzPath");
+    }
+
+    // Get all image files from the archive
+    $imageFiles = [];
+    for ($i = 0; $i < $zip->numFiles; $i++) {
+        $stat = $zip->statIndex($i);
+        if (preg_match('/\.(jpg|jpeg|png|tiff|bmp|gif)$/i', $stat['name'])) {
+            $imageFiles[] = $stat['name'];
+        }
+    }
+
+    // Sort files by name (assuming they're in order)
+    sort($imageFiles);
+
+    // Extract and rename
+    $cover = $imageFiles[0];
+    $ext = pathinfo($cover, PATHINFO_EXTENSION);
+    $cover_output = replace_extension($cbzPath, $ext);
+    if (!file_exists($cover_output)) {
+        $zip->extractTo(sys_get_temp_dir(), $cover);
+        rename(sys_get_temp_dir() . "/$cover", $cover_output);
+    }
+    return $cover_output;
+}
+
+function cbzToText(string $cbzPath): string {
+    $zip = new ZipArchive();
+    if ($zip->open($cbzPath) !== true) {
+        throw new Exception("Failed to open CBZ archive: $cbzPath");
+    }
+
+    // Get all image files from the archive
+    $imageFiles = [];
+    for ($i = 0; $i < $zip->numFiles; $i++) {
+        $stat = $zip->statIndex($i);
+        if (preg_match('/\.(jpg|jpeg|png|tiff|bmp|gif)$/i', $stat['name'])) {
+            $imageFiles[] = $stat['name'];
+        }
+    }
+
+    // Sort files by name (assuming they're in order)
+    sort($imageFiles);
+
+    $texts = [];
+    $pagesToProcess = array_merge(
+        array_slice($imageFiles, 0, 8), // First 8 pages
+        [end($imageFiles)]              // Last page
+    );
+
+    // Process each page
+    foreach ($pagesToProcess as $page) {
+        $tempFile = tempnam(sys_get_temp_dir(), 'cbz_');
+        $zip->extractTo(sys_get_temp_dir(), $page);
+
+        // Find the extracted file (might have different path)
+        $extractedFile = null;
+        foreach (glob(sys_get_temp_dir() . '/*') as $file) {
+            if (basename($file) === $page) {
+                $extractedFile = $file;
+                break;
+            }
+        }
+
+        if (!$extractedFile) {
+            throw new Exception("Failed to extract page: $page");
+        }
+
+        // Run Tesseract OCR
+        $cmd = escape_command([
+            'tesseract',
+            '--psm', '11',
+            $extractedFile,
+            '-'
+        ]);
+
+        $text = `$cmd`;
+        $texts[] = $text;
+
+        // Clean up
+        unlink($extractedFile);
+    }
+
+    // Process the last page for barcode
+    $lastPage = end($imageFiles);
+    $tempFile = tempnam(sys_get_temp_dir(), 'cbz_');
+    $zip->extractTo(sys_get_temp_dir(), $lastPage);
+
+    // Find the extracted file
+    $extractedFile = null;
+    foreach (glob(sys_get_temp_dir() . '/*') as $file) {
+        if (basename($file) === $lastPage) {
+            $extractedFile = $file;
+            break;
+        }
+    }
+
+    if ($extractedFile) {
+        // Run ZXingReader to scan barcode
+        $cmd = escape_command([
+            'ZXingReader',
+            '-bytes',
+            '-single',
+            $extractedFile
+        ]);
+
+        $texts[] = `$cmd`;
+
+        unlink($extractedFile);
+    }
+
+    // Clean up
+    $zip->close();
+    return implode("\n", $texts);
 }
 
 function has_extension($path, $ext) {
@@ -527,90 +664,78 @@ function pdfToText($path) {
     if (!has_extension($path, 'pdf')) {
         return '';
     }
-    $txt_path = replace_extension($path, 'txt');
-    if (!file_exists($txt_path)) {
-        $text = '';
+    $text = '';
 
+    $cmd = escape_command([
+        'pdftotext', '-f', '1', '-l', '11', '-nodiag', $path, '-'
+    ]);
+    $text .= `$cmd`;
+
+    $numPages = numberOfPages($path);
+    if ($numPages) {
         $cmd = escape_command([
-            'pdftotext', '-f', '1', '-l', '11', '-nodiag', $path, '-'
+            'pdftotext', '-f', $numPages, '-l', $numPages, '-nodiag', $path, '-'
         ]);
         $text .= `$cmd`;
+    }
 
-        $numPages = numberOfPages($path);
+    if (PERFORM_OCR && empty(grepIsbns($text))) {
+        $subset_path = replace_extension($path, 'subset.pdf.tmp');
+        $subset_text = replace_extension($path, 'subset.pdf.txt');
+
+        // $command = "pdftk '$path' cat 1-11 $numPages output '$subset_path'";
         if ($numPages) {
-            $cmd = escape_command([
-                'pdftotext', '-f', $numPages, '-l', $numPages, '-nodiag', $path, '-'
-            ]);
-            $text .= `$cmd`;
-        }
-
-        if (PERFORM_OCR && empty(grepIsbns($text))) {
-            $subset_path = replace_extension($path, 'subset.pdf.tmp');
-            $subset_text = replace_extension($path, 'subset.pdf.txt');
-
-            // $command = "pdftk '$path' cat 1-11 $numPages output '$subset_path'";
-            if ($numPages) {
-                $command = escape_command([
-                    "pdftk", $path, 'cat', '1-11', $numPages, 'output', $subset_path
-                ]);
-            } else {
-                $command = escape_command([
-                    "pdftk", $path, 'cat', '1-11', 'output', $subset_path
-                ]);
-            }
-            passthru($command);
-
-            // $command = "ocrmypdf -l 'eng+rus+deu+fra+kor+kaz+kir+lat' --output-type none --force-ocr --sidecar '$subset_text' '$subset_path' -";
-            $languages = 'eng+rus+deu+fra+kor+kaz+kir+mon';
-            // $languages = 'eng';
             $command = escape_command([
-                "ocrmypdf", '--jobs', '2', '-l', $languages, '--output-type', 'none', '--force-ocr', '--sidecar', $subset_text, $subset_path, "-"
+                "pdftk", $path, 'cat', '1-11', $numPages, 'output', $subset_path
             ]);
-            passthru($command);
-
-            $text .= file_get_contents($subset_text);
-
-            unlink($subset_text);
-            unlink($subset_path);
-        }
-
-        $back = pdfBackCover($path);
-        if ($back) {
-            // Read any barcode on the back
-            $cmd = escape_command([
-                'ZXingReader', '-bytes', '-single', $back
+        } else {
+            $command = escape_command([
+                "pdftk", $path, 'cat', '1-11', 'output', $subset_path
             ]);
-            $barcode = `$cmd`;
-            if ($barcode) {
-                $text .= "\n$barcode\n";
-            }
         }
+        passthru($command);
 
-        // read config.txt
-        $configtxt = readConfigTxt($path);
-        if (!empty($configtxt['isbn'])) {
-            $text .= "\n{$configtxt['isbn']}\n";
-        }
-        if (!empty($configtxt['title'])) {
-            $text .= "\n{$configtxt['title']}\n";
-        }
+        // $command = "ocrmypdf -l 'eng+rus+deu+fra+kor+kaz+kir+lat' --output-type none --force-ocr --sidecar '$subset_text' '$subset_path' -";
+        $languages = 'eng+rus+deu+fra+kor+kaz+kir+mon';
+        // $languages = 'eng';
+        $command = escape_command([
+            "ocrmypdf", '--jobs', '2', '-l', $languages, '--output-type', 'none', '--force-ocr', '--sidecar', $subset_text, $subset_path, "-"
+        ]);
+        passthru($command);
 
-        atomic_file_put_contents($txt_path, $text);
+        $text .= file_get_contents($subset_text);
+
+        unlink($subset_text);
+        unlink($subset_path);
     }
-    if (!file_exists($txt_path)) {
-        throw new DownloadException('could not extract text');
+
+    $back = pdfBackCover($path);
+    if ($back) {
+        // Read any barcode on the back
+        $cmd = escape_command([
+            'ZXingReader', '-bytes', '-single', $back
+        ]);
+        $barcode = `$cmd`;
+        if ($barcode) {
+            $text .= "\n$barcode\n";
+        }
     }
-    $txt = file_get_contents($txt_path);
-    return $txt;
+
+    // read config.txt
+    $configtxt = readConfigTxt($path);
+    if (!empty($configtxt['isbn'])) {
+        $text .= "\n{$configtxt['isbn']}\n";
+    }
+    if (!empty($configtxt['title'])) {
+        $text .= "\n{$configtxt['title']}\n";
+    }
+
+    return $text;
 }
 
 function epubToText($path) {
     if (!has_extension($path, 'epub')) {
         return '';
-    }
-    $txt_path = replace_extension($path, 'txt');
-    if (file_exists($txt_path)) {
-        return file_get_contents($txt_path);
     }
 
     $container_txt = file_get_contents("zip://$path#META-INF/container.xml");
@@ -684,7 +809,6 @@ function epubToText($path) {
 
     $texts[] = strip_tags($rootfile_xml->metadata->asXML());
     $text = implode("\n\n", $texts);
-    atomic_file_put_contents($txt_path, $text);
     return $text;
 }
 
@@ -749,11 +873,10 @@ function epubCover($path) {
 }
 
 function fileCoverImage($path) {
-    if (has_extension($path, 'epub')) {
-        return epubCover($path);
-    }
-    if (has_extension($path, 'pdf')) {
-        return pdfCover($path);
+    $extension = pathinfo($path, PATHINFO_EXTENSION);
+    $function = $extension . 'Cover';  // pdfCover etc.
+    if (function_exists($function)) {
+        return $function($path);
     }
     return false;
 }
@@ -934,8 +1057,53 @@ function asciiCleanup($title) {
     }
     $title = trim($title);
     $title = iconv('UTF-8', 'ASCII//TRANSLIT', $title);
-    $title = preg_replace('~[^0-9A-Za-z ]+~', '', $title);
+    $title = preg_replace('~[^():,.0-9A-Za-z -]+~', '', $title);
     return $title;
+}
+
+/**
+ * Cleans a string to make it safe for use as a filename across Linux, Windows, and macOS.
+ *
+ * @param string $filename The input string to clean.
+ * @param string $replacement The character to replace forbidden characters with.
+ * @return string The sanitized filename.
+ */
+function filenameCleanup($filename, string $replacement = ''): string {
+    if (is_array($filename)) {
+        $filename = implode('; ', $filename);
+    }
+
+    // 1. Handle Invalid UTF-8 sequences safely
+    // This prevents preg_replace from returning null on broken input
+    $filename = mb_convert_encoding($filename, 'UTF-8', 'UTF-8');
+
+    // 2. Remove Control Characters (0-31 and 127)
+    // Using hex range to avoid encoding issues in the script itself
+    $filename = preg_replace('/[\x00-\x1F\x7F]/u', $replacement, $filename);
+
+    // 3. Remove Forbidden Characters (Windows/Linux/macOS)
+    // < > " / \ | ? *
+    $filename = preg_replace('/[<>"\/\\\\|?*]/u', $replacement, $filename);
+
+    // 4. Windows: Filenames cannot end in a space or a dot
+    $filename = rtrim($filename, ' .');
+
+    // 5. Reserved Names (Windows & Linux)
+    // Check for CON, PRN, AUX, NUL, COM1-9, LPT1-9 and current/parent dir (.) (..)
+    $reservedPattern = '/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]|\.|\.\.)$/i';
+
+    // Check if the base name (without extension) matches a reserved name
+    $pathInfo = pathinfo($filename);
+    if (preg_match($reservedPattern, $pathInfo['filename'])) {
+        $filename = $replacement . $filename;
+    }
+
+    // 6. Final safety check: If the filename is empty after cleaning
+    if (empty($filename)) {
+        $filename = 'default_file';
+    }
+
+    return $filename;
 }
 
 function grepIsbns($txt) {
@@ -1414,4 +1582,64 @@ function isValidFile($path) {
         return $return_var == 0;
     }
     throw new InvalidArgumentException($path);
+}
+
+function createFtpFileName($path, $metadata) {
+    return createFileName(
+        $metadata['id'],
+        $metadata['isbn'],
+        $metadata['title'],
+        $metadata['authors'],
+        $path
+    );
+}
+
+function createFileName($id, $isbn, $title, $author, $extension) {
+    if (str_contains($extension, '.')) {
+        $extension = pathinfo($extension, PATHINFO_EXTENSION);
+    }
+
+    $isbn = filenameCleanup($isbn);
+    $title = filenameCleanup($title ?? '');
+    $author = filenameCleanup($author ?? '');
+    $newtitle = "$id $isbn $title - $author";
+    if (empty($author) || strlen($newtitle) >= 250) {
+        $newtitle = "$id $isbn $title";
+    }
+    $newtitle = trim(substr($newtitle, 0, 250));
+    return $newtitle . ".$extension";
+}
+
+function cleanupSearchQuery($title) {
+    $title = html_entity_decode($title, ENT_QUOTES | ENT_HTML5);
+    $title = preg_replace('~\([^)]*\)~i', ' ', $title);
+    $title = preg_replace('~\be.?book\b~i', ' ', $title);
+    $title = preg_replace('~\bedition\b~i', ' ', $title);
+    $title = preg_replace('~\bvolume\b~i', ' ', $title);
+    $title = preg_replace('~\bversion\b~i', ' ', $title);
+    $title = preg_replace('~\bupdated\b~i', ' ', $title);
+    $title = preg_replace('~\bspecial\b~i', ' ', $title);
+    $title = preg_replace('~\brevised\b~i', ' ', $title);
+    $title = preg_replace('~\bupgraded\b~i', ' ', $title);
+    $title = preg_replace('~\b(unknown|unbekannt)\b~i', ' ', $title);
+    $title = preg_replace('~\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|ninteenth|twentieth|twenty|thirtieth|thirty|fortieth|forty|fiftieth|fifty)\b~i', ' ', $title);
+    $title = preg_replace('~\b原著.*$~iu', ' ', $title);
+    $title = preg_replace('~\bbuku\b~i', ' ', $title);
+    $title = preg_replace('~\bO\'\w+\b~i', ' ', $title); // O'Connell
+    $title = preg_replace('~\b[0-9A-Z]+\b~u', ' ', $title);
+    $title = preg_replace('~\W~u', ' ', $title);
+    $title = preg_replace('~\b.{1,3}\b~u', ' ', $title);
+    return trim($title);
+}
+
+function chooseFormatToDownload($formats) {
+    $formats = array_map('strtolower', $formats);
+    $to_download = [];
+    $allowed_formats = ['epub', 'pdf', 'djvu', 'djv', 'mobi', 'txt', 'fb2', 'lit', 'rtf', 'azw', 'azw3', 'cbz'];
+    foreach ($allowed_formats as $f) {
+        if (in_array($f, $formats)) {
+            return $f;
+        }
+    }
+    return null;
 }
