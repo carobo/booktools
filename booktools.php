@@ -1586,7 +1586,7 @@ function isValidFile($path) {
 
 function createFtpFileName($path, $metadata) {
     return createFileName(
-        $metadata['id'],
+        $metadata['id'] ?? null,
         $metadata['isbn'],
         $metadata['title'],
         $metadata['authors'],

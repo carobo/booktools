@@ -65,8 +65,7 @@ function lgpSubmitMetadata($ftp_path, $metadata) {
     $lgp_session_id = LIBGEN_SESSIONID;
 
     $url = "https://$libgen_host/librarian.php";
-    $pre_lg_topic = 'l';
-    if (defined('PRE_LG_TOPIC')) $pre_lg_topic = PRE_LG_TOPIC;
+    $pre_lg_topic = $metadata['pre_lg_topic'] ?? 'l';
     $formData = [
         'pre_lg_topic' => $pre_lg_topic,
         'action' => 'add',
@@ -221,3 +220,14 @@ function upload($path, $metadata) {
     return $ftp || $zlib;
 }
 
+function libgenTopics() {
+    return [
+        'l' => 'Non-fiction books',
+        'f' => 'Fiction books',
+        'a' => 'Scientific articles',
+        'r' => 'Fiction books Rus',
+        'c' => 'Comics',
+        'm' => 'Magazines',
+        's' => 'Standards',
+    ];
+}
