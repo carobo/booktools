@@ -423,7 +423,9 @@ function fileToText($path) {
     $function = $extension . 'ToText';  // pdfToText etc.
     if (function_exists($function)) {
         $text = $function($path);
-        atomic_file_put_contents($txt_path, $text);
+        if (!file_exists($txt_path)) {
+            atomic_file_put_contents($txt_path, $text);
+        }
         return $text;
     }
 
@@ -444,6 +446,13 @@ function azw3Cover($path) {
 
 function azw3ToText($path) {
     return mobiToText($path);
+}
+
+function litToText($path) {
+    $txt_path = replace_extension($path, 'txt');
+    $cmd = escape_command(['ebook-convert', $path, $txt_path]);
+    exec($cmd);
+    return file_get_contents($txt_path);
 }
 
 function mobiCover($path) {
@@ -586,17 +595,9 @@ function cbzToText(string $cbzPath): string {
     foreach ($pagesToProcess as $page) {
         $tempFile = tempnam(sys_get_temp_dir(), 'cbz_');
         $zip->extractTo(sys_get_temp_dir(), $page);
+        $extractedFile = sys_get_temp_dir() . '/' . $page;
 
-        // Find the extracted file (might have different path)
-        $extractedFile = null;
-        foreach (glob(sys_get_temp_dir() . '/*') as $file) {
-            if (basename($file) === $page) {
-                $extractedFile = $file;
-                break;
-            }
-        }
-
-        if (!$extractedFile) {
+        if (!is_file($extractedFile)) {
             throw new Exception("Failed to extract page: $page");
         }
 
@@ -1315,12 +1316,44 @@ function numberOfPages($path) {
     return null;
 }
 
-function recursive_glob($dir, $pattern) {
-    $output = trim(`fdfind --type file --glob '$pattern' '$dir'`);
-    if (empty($output)) {
-        return [];
+function recursive_glob($dir, $patterns) {
+    if (!is_array($patterns)) {
+        $patterns = [$patterns];
     }
-    return explode("\n", $output);
+
+    $stack = [$dir];
+
+    while (!empty($stack)) {
+        $currentDir = array_pop($stack);
+
+        try {
+            $files = scandir($currentDir, SCANDIR_SORT_NONE);
+        } catch (Exception $e) {
+            continue; // Skip directories we can't access
+        }
+
+        shuffle($files);
+
+        foreach ($files as $file) {
+            if ($file === '.' || $file === '..') {
+                continue;
+            }
+
+            $path = $currentDir . DIRECTORY_SEPARATOR . $file;
+
+            if (is_dir($path)) {
+                $stack[] = $path; // Add directory to stack for later processing
+            } else {
+                // Check if file matches any pattern
+                foreach ($patterns as $pattern) {
+                    if (fnmatch($pattern, $file)) {
+                        yield $path;
+                        break; // No need to check other patterns if one matches
+                    }
+                }
+            }
+        }
+    }
 }
 
 function readcsvs($dir) {
@@ -1580,6 +1613,10 @@ function isValidFile($path) {
     if (has_extension($path, 'djvu')) {
         exec(escape_command(['djvutxt', '--page', '1', $path]), $output, $return_var);
         return $return_var == 0;
+    }
+    if (has_extension($path, 'lit')) {
+        exec(escape_command(['file', '-bi', $path]), $output, $return_var);
+        return str_starts_with($output[0], 'application/x-ms-reader');
     }
     throw new InvalidArgumentException($path);
 }
