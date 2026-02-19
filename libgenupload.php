@@ -14,7 +14,8 @@ function uploadFile($path) {
     $cfile = new CURLFile($path);
     $data = ["file" => $cfile];
 
-    $ch = curl_init($url);
+    static $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
     // curl_setopt($ch, CURLOPT_TIMEOUT, 3600);
     curl_setopt($ch, CURLOPT_POST,1);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
@@ -44,7 +45,8 @@ function formSubmitMetadata($url, $metadata) {
     }
 
     // post formData to $url
-    $ch = curl_init($url);
+    static $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_TIMEOUT, TIMEOUT);
     curl_setopt($ch, CURLOPT_POST, 1);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $formData);
@@ -73,7 +75,8 @@ function lgpSubmitMetadata($ftp_path, $metadata) {
         'ftppath' => $ftp_path,
     ];
 
-    $ch = curl_init($url);
+    static $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_TIMEOUT, TIMEOUT);
     curl_setopt($ch, CURLOPT_POST, 1);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $formData);
@@ -121,7 +124,7 @@ function lgpSubmitMetadata($ftp_path, $metadata) {
 
     $formData['new_1_101'] = getLanguageCode($metadata['language']);
 
-    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_TIMEOUT, TIMEOUT);
     curl_setopt($ch, CURLOPT_POST, 1);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $formData);
@@ -149,6 +152,10 @@ function ftpUpload($path, $metadata) {
     $dest = LIBGEN_FTP_URL . $newtitle;
     $res = copy($path, $dest);
     echo ".";
+
+    if (!$res) {
+        $res = file_exists($dest);
+    }
 
     if ($res)
         try {

@@ -26,7 +26,7 @@ while (true) {
         }
 
         $dom = parseHtml($html);
-        $title = $dom->querySelector('h2#title')->textContent;
+        $title = $dom->querySelector('h2')->textContent;
         $author = $dom->querySelector('p.author a:first-child')->textContent;
 
         $search = cleanupSearchQuery("$title $author");
@@ -35,7 +35,7 @@ while (true) {
         }
 
         $exts = [];
-        $possible_exts = ['pdf', 'epub', 'txt'];
+        $possible_exts = ['epub', 'pdf', 'azw', 'azw3', 'mobi', 'cbz'];
         foreach ($possible_exts as $ext) {
             if (str_contains($html, $ext)) {
                 $exts[] = $ext;
@@ -56,10 +56,15 @@ while (true) {
                 echo "Downloading $download_url to $filepath...";
                 try {
                     $saved = httpSave($download_url, null, ['X-Requested-With: XMLHttpRequest']);
+                    
+                    if (filesize($saved) < 1000) {
+                        throw new DownloadException($saved);
+                    }
+
                     rename($saved, $filepath);
                     echo " success.\n";
                     $errors = 0;
-                    break;
+                    break 2;
                 } catch (DownloadException $e) {
                     echo " failed: $e\n";
                     $errors += 1;

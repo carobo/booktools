@@ -25,11 +25,12 @@ final class ProgressBar {
             }
         }
     }
-    
+
     public static function showFor($ch) {
         $progress = new ProgressBar();
         curl_setopt($ch, CURLOPT_PROGRESSFUNCTION, [$progress, 'progress']);
         curl_setopt($ch, CURLOPT_NOPROGRESS, false);
+        curl_setopt($ch, CURLOPT_UPLOAD_BUFFERSIZE, 1 << 20);
     }
 }
 
@@ -65,15 +66,20 @@ function httpSave($url, $postfields=null, $headers=[]) {
         throw new FileInputOutputException($tmp_path);
     }
 
-    $ch = curl_init($url);
-
+    static $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_BUFFERSIZE, 1 << 20);
     curl_setopt($ch, CURLOPT_TIMEOUT, TIMEOUT);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, TIMEOUT / 10);
     curl_setopt($ch, CURLOPT_FILE, $fp);
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     if (!empty($postfields)) {
         curl_setopt($ch, CURLOPT_POST, 1);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $postfields);
+    } else {
+        curl_setopt($ch, CURLOPT_POSTFIELDS, null);
+        curl_setopt($ch, CURLOPT_POST, 0);
     }
     // curl_setopt($ch, CURLOPT_HEADER, 1); // include headers in response
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
@@ -108,9 +114,11 @@ function httpGet($url, $postfields=null) {
     $scheme = parse_url($url, PHP_URL_SCHEME);
     $origin = "$scheme://$domain";
 
-    $ch = curl_init($url);
+    static $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
 
     curl_setopt($ch, CURLOPT_TIMEOUT, TIMEOUT);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, TIMEOUT / 10);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
@@ -118,6 +126,9 @@ function httpGet($url, $postfields=null) {
     if (!empty($postfields)) {
         curl_setopt($ch, CURLOPT_POST, 1);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $postfields);
+    } else {
+        curl_setopt($ch, CURLOPT_POSTFIELDS, null);
+        curl_setopt($ch, CURLOPT_POST, 0);
     }
     // curl_setopt($ch, CURLOPT_HEADER, 1); // include headers in response
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
@@ -419,12 +430,17 @@ function fileToText($path) {
         return file_get_contents($txt_path);
     }
 
+    $gz_path = replace_extension($path, 'txt.gz');
+    if (file_exists($gz_path)) {
+        return gzdecode(file_get_contents($gz_path));
+    }
+
     $extension = pathinfo($path, PATHINFO_EXTENSION);
     $function = $extension . 'ToText';  // pdfToText etc.
     if (function_exists($function)) {
         $text = $function($path);
-        if (!file_exists($txt_path)) {
-            atomic_file_put_contents($txt_path, $text);
+        if (!file_exists($txt_path) && !file_exists($gz_path)) {
+            atomic_file_put_contents($gz_path, gzencode($text));
         }
         return $text;
     }
@@ -661,6 +677,14 @@ function replace_extension($path, $ext) {
     return "$path.$ext";
 }
 
+function remove_extension($path) {
+    $pos = strrpos($path, '.');
+    if ($pos !== false) {
+        $path = substr($path, 0, $pos);
+    }
+    return $path;
+}
+
 function pdfToText($path) {
     if (!has_extension($path, 'pdf')) {
         return '';
@@ -720,6 +744,7 @@ function pdfToText($path) {
         if ($barcode) {
             $text .= "\n$barcode\n";
         }
+        unlink($back);
     }
 
     // read config.txt
@@ -1118,7 +1143,19 @@ function grepIsbns($txt) {
     if (preg_match_all('~DOI: 10.[1-9][0-9.]{3,10}/(\d{10,13})~i', $txt, $matches)) {
         $isbns = mergeIsbnsArray($isbns, $matches[1]);
     }
+    if (preg_match_all('~\D([0-9]{9}[0-9Xx])\D~i', $txt, $matches)) {
+        $isbns = mergeIsbnsArray($isbns, $matches[1]);
+    }
     return $isbns;
+}
+
+function hasAnyIsbn($isbns) {
+    foreach ($isbns as $isbn) {
+        if (zlibHasIsbn($isbn) || inAnnasArchive($isbn)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function zlibHasIsbn($isbn) {
@@ -1612,6 +1649,10 @@ function isValidFile($path) {
     }
     if (has_extension($path, 'djvu')) {
         exec(escape_command(['djvutxt', '--page', '1', $path]), $output, $return_var);
+        return $return_var == 0;
+    }
+    if (has_extension($path, 'mobi') || has_extension($path, 'azw') || has_extension($path, 'azw3')) {
+        exec(escape_command(['mobitool', $path]), $output, $return_var);
         return $return_var == 0;
     }
     if (has_extension($path, 'lit')) {

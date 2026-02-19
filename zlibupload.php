@@ -366,11 +366,15 @@ function zlibHttpRequest($url, $postfields=null, $headers=[]) {
         $cookies[] = "$name=$value";
     }
 
-    $ch = curl_init($url);
+    static $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_TIMEOUT, TIMEOUT);
     if (!empty($postfields)) {
         curl_setopt($ch, CURLOPT_POST, 1);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $postfields);
+    } else {
+        curl_setopt($ch, CURLOPT_POSTFIELDS, null);
+        curl_setopt($ch, CURLOPT_POST, 0);
     }
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_HEADERFUNCTION, '_zlibHandleHeaders');
