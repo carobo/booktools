@@ -9,10 +9,26 @@ final class ProgressBar {
     private int $dotsDrawn = 0;
 
     public function progress($resource, $download_size, $downloaded, $upload_size, $uploaded) {
-        if ($upload_size != 0) {
+        if ($upload_size > (1 << 20)) {
             $pct = ($uploaded * 100) / $upload_size;
             if ($this->dotsDrawn == 0) {
-                echo "\r" . str_repeat(" ", 99) . "|\r";
+                $mb = round($upload_size / (1 << 20));
+                printf("\r%94d MiB |\r", $mb);
+                $this->dotsDrawn += 1;
+            }
+            while ($this->dotsDrawn < $pct) {
+                echo '.';
+                $this->dotsDrawn += 1;
+            }
+            if ($this->dotsDrawn == 100) {
+                echo "\n";
+                $this->dotsDrawn += 1;
+            }
+        } else if ($download_size > (1 << 20)) {
+            $pct = ($downloaded * 100) / $download_size;
+            if ($this->dotsDrawn == 0) {
+                $mb = round($download_size / (1 << 20));
+                printf("\r%94d MiB |\r", $mb);
                 $this->dotsDrawn += 1;
             }
             while ($this->dotsDrawn < $pct) {
@@ -51,7 +67,6 @@ function httpSave($url, $postfields=null, $headers=[]) {
     if (empty($url_path) || str_ends_with($url_path, '/')) $url_path .= 'index.html';
     $dir = getSiteDirectory($domain);
     $output_path = "$dir/$url_path";
-    $tmp_path = "$output_path.tmp";
 
     if (file_exists($output_path)) {
         echo "File already exists: $output_path\n";
@@ -61,17 +76,25 @@ function httpSave($url, $postfields=null, $headers=[]) {
     $output_dir = dirname($output_path);
     if (!is_dir($output_dir)) mkdir($output_dir, 0777, true);
 
-    $fp = fopen($tmp_path, 'w');
-    if ($fp === false) {
-        throw new FileInputOutputException($tmp_path);
-    }
+    atomic_file_put_contents($output_path, httpGet($url, $postfields, $headers));
+    return $output_path;
+}
+
+function httpGet($url, $postfields=null, $headers=[]) {
+    $domain = parse_url($url, PHP_URL_HOST);
+    $scheme = parse_url($url, PHP_URL_SCHEME);
+    $origin = "$scheme://$domain";
 
     static $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_BUFFERSIZE, 1 << 20);
+    curl_setopt($ch, CURLOPT_BUFFERSIZE, 1 << 18);
+    curl_setopt($ch, CURLOPT_MAX_RECV_SPEED_LARGE, 1 << 18);
+    curl_setopt($ch, CURLOPT_LOW_SPEED_LIMIT, 10);
+    curl_setopt($ch, CURLOPT_LOW_SPEED_TIME, 10);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
     curl_setopt($ch, CURLOPT_TIMEOUT, TIMEOUT);
-    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, TIMEOUT / 10);
-    curl_setopt($ch, CURLOPT_FILE, $fp);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    // curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     if (!empty($postfields)) {
@@ -81,7 +104,6 @@ function httpSave($url, $postfields=null, $headers=[]) {
         curl_setopt($ch, CURLOPT_POSTFIELDS, null);
         curl_setopt($ch, CURLOPT_POST, 0);
     }
-    // curl_setopt($ch, CURLOPT_HEADER, 1); // include headers in response
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
         "Host: $domain",
         "Origin: $origin",
@@ -91,10 +113,10 @@ function httpSave($url, $postfields=null, $headers=[]) {
         "User-Agent: Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:146.0) Gecko/20100101 Firefox/146.0",
         ...$headers
     ]);
+    ProgressBar::showFor($ch);
 
     $response = curl_exec($ch);
     $http_status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    fclose($fp);
 
     // Check for any errors
     if (curl_errno($ch)) {
@@ -103,47 +125,6 @@ function httpSave($url, $postfields=null, $headers=[]) {
 
     if ($http_status != 200) {
         throw new DownloadException($http_status);
-    }
-
-    rename($tmp_path, $output_path);
-    return $output_path;
-}
-
-function httpGet($url, $postfields=null) {
-    $domain = parse_url($url, PHP_URL_HOST);
-    $scheme = parse_url($url, PHP_URL_SCHEME);
-    $origin = "$scheme://$domain";
-
-    static $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-
-    curl_setopt($ch, CURLOPT_TIMEOUT, TIMEOUT);
-    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, TIMEOUT / 10);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    if (!empty($postfields)) {
-        curl_setopt($ch, CURLOPT_POST, 1);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $postfields);
-    } else {
-        curl_setopt($ch, CURLOPT_POSTFIELDS, null);
-        curl_setopt($ch, CURLOPT_POST, 0);
-    }
-    // curl_setopt($ch, CURLOPT_HEADER, 1); // include headers in response
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        "Host: $domain",
-        "Origin: $origin",
-        "Referer: $origin",
-        'Client-IP: ' . random_ip(),
-        'X-Forwarded-For: ' . random_ip(),
-    ]);
-
-    $response = curl_exec($ch);
-
-    // Check for any errors
-    if (curl_errno($ch)) {
-        throw new DownloadException(curl_error($ch));
     }
 
     return $response;
@@ -381,6 +362,7 @@ function guessLanguage($text) {
 function getLanguageCode($language) {
     $languages = \Symfony\Component\Intl\Languages::getAlpha3Names();
     $languages = array_flip($languages);
+    $languages['Dutch'] = 'dut';
     return $languages[$language];
 }
 
@@ -1264,6 +1246,8 @@ function isValidISBN13(string $isbn): bool {
         return false;
     }
 
+    if (!str_starts_with($isbn, '9')) return false;
+
     $sum = 0;
 
     // 3. Loop through the first 12 digits (index 0 to 11).
@@ -1620,10 +1604,10 @@ function convertISBN10toISBN13(string $isbn10): string|false {
 }
 
 function atomic_file_put_contents($path, $data) {
-    $tmp_path = $path . '.tmp';
+    $tmp_path = replace_extension($path, 'tmp');
     $res = file_put_contents($tmp_path, $data);
     if ($res === false) {
-        return false;
+        return file_put_contents($path, $data);
     }
     return rename($tmp_path, $path);
 }
@@ -1648,7 +1632,7 @@ function isValidFile($path) {
         return $return_var == 0;
     }
     if (has_extension($path, 'djvu')) {
-        exec(escape_command(['djvutxt', '--page', '1', $path]), $output, $return_var);
+        exec(escape_command(['djvutxt', '--page=1', $path]), $output, $return_var);
         return $return_var == 0;
     }
     if (has_extension($path, 'mobi') || has_extension($path, 'azw') || has_extension($path, 'azw3')) {
@@ -1677,7 +1661,7 @@ function createFileName($id, $isbn, $title, $author, $extension) {
         $extension = pathinfo($extension, PATHINFO_EXTENSION);
     }
 
-    $isbn = filenameCleanup($isbn);
+    $isbn = cleanISBN($isbn);
     $title = filenameCleanup($title ?? '');
     $author = filenameCleanup($author ?? '');
     $newtitle = "$id $isbn $title - $author";

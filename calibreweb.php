@@ -37,7 +37,7 @@ while (true) {
         $exts = [];
         $possible_exts = ['epub', 'pdf', 'azw', 'azw3', 'mobi', 'cbz'];
         foreach ($possible_exts as $ext) {
-            if (str_contains($html, $ext)) {
+            if (preg_match("~\b$ext\b~", $html)) {
                 $exts[] = $ext;
             }
         }
@@ -49,19 +49,19 @@ while (true) {
             
 
             $download_urls = [
-                "$base/show/$id/$ext",
                 "$base/download/$id/$ext/$id.$ext",
+                "$base/show/$id/$ext",
             ];
             foreach ($download_urls as $download_url) {
                 echo "Downloading $download_url to $filepath...";
                 try {
-                    $saved = httpSave($download_url, null, ['X-Requested-With: XMLHttpRequest']);
+                    $contents = httpGet($download_url, null, ['X-Requested-With: XMLHttpRequest']);
                     
-                    if (filesize($saved) < 1000) {
-                        throw new DownloadException($saved);
+                    if (empty($contents) || strlen($contents) < 10000) {
+                        throw new DownloadException($contents);
                     }
 
-                    rename($saved, $filepath);
+                    atomic_file_put_contents($filepath, $contents);
                     echo " success.\n";
                     $errors = 0;
                     break 2;

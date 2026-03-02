@@ -69,7 +69,9 @@ foreach ($libraries as $library) {
                 $filename = createFileName($id, $isbn, $metadata['title'], $metadata['authors'], $ext);
                 $url = "http://$base/get/$format/$id/$library";
 
-                if (file_exists("$dir/$filename")) continue;
+                if (file_exists("$dir/$filename")
+                    || file_exists(replace_extension("$dir/$filename", "txt"))
+                    || file_exists(replace_extension("$dir/$filename", "txt.gz"))) continue;
 
                 echo "Downloading $url to $filename...";
 
