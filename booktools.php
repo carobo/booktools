@@ -132,7 +132,7 @@ function httpGet($url, $postfields=null, $headers=[]) {
 
 function searchAnnasArchive($q) {
     // $url = 'https://annas-archive.org/dyn/search_counts?' . http_build_query(['q' => $q]);
-    $url = 'https://annas-archive.li/dyn/search_counts?' . http_build_query(['q' => $q]);
+    $url = 'https://annas-archive.gl/dyn/search_counts?' . http_build_query(['q' => $q]);
     $response = httpGet($url);
     $decoded = json_decode($response);
     if (empty($response) || empty($decoded)) {
@@ -453,6 +453,10 @@ function litToText($path) {
     return file_get_contents($txt_path);
 }
 
+function fb2ToText($path) {
+    return litToText($path);
+}
+
 function mobiCover($path) {
     $cmd = escape_command(['mobitool', '-c', $path]);
     $output = `$cmd`;
@@ -645,6 +649,12 @@ function cbzToText(string $cbzPath): string {
     // Clean up
     $zip->close();
     return implode("\n", $texts);
+}
+
+function fb2Cover($path) {
+    $fb2cover = __DIR__ . '/fb2cover.py';
+    $cmd = escape_command([$fb2cover, $path]);
+    return trim(`$cmd`);
 }
 
 function has_extension($path, $ext) {
