@@ -766,7 +766,7 @@ function epubToText($path) {
 
     try {
         $rootfile_xml = new SimpleXMLElement($rootfile_txt);
-        if (empty($rootfile_xml->manifest)) {
+        if (empty($rootfile_xml->manifest) || empty($rootfile_xml->manifest->item)) {
             $without_ns = preg_replace('~<(/?)[a-z]+:~', '<\1', $rootfile_txt);
             $rootfile_xml = new SimpleXMLElement($without_ns);
         }
@@ -1671,14 +1671,15 @@ function createFileName($id, $isbn, $title, $author, $extension) {
         $extension = pathinfo($extension, PATHINFO_EXTENSION);
     }
 
-    $isbn = cleanISBN($isbn);
+    $isbn = str_replace('-', '', $isbn);
+    $isbn = filenameCleanup($isbn);
     $title = filenameCleanup($title ?? '');
     $author = filenameCleanup($author ?? '');
     $newtitle = "$id $isbn $title - $author";
-    if (empty($author) || strlen($newtitle) >= 250) {
+    if (empty($author) || strlen($newtitle) >= 240) {
         $newtitle = "$id $isbn $title";
     }
-    $newtitle = trim(substr($newtitle, 0, 250));
+    $newtitle = trim(substr($newtitle, 0, 240));
     return $newtitle . ".$extension";
 }
 
