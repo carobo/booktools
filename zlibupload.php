@@ -21,6 +21,19 @@ function existsInZlib($isbns) {
     return false;
 }
 
+function requestedInZlib($query) {
+    $zlibHost = ZLIB_HOST;
+
+    $result = zlibHttpRequest("https://$zlibHost/requests?s=" . urlencode($query));
+    if (str_contains($result, 'No books have been requested')) {
+        return false;
+    }
+    if (str_contains($result, 'request-peoples')) {
+        return true;
+    }
+    throw new UnexpectedResponseException($result);
+}
+
 function zlibFtpCollection($id)
 {
     $zlibHost = ZLIB_HOST;
@@ -425,7 +438,7 @@ function zlibInitializeCtoken() {
 
 function zlibGetRequestedBooks($page = 1) {
     $zlibHost = ZLIB_HOST;
-    $fp = fopen('zlib_requested.txt', 'w');
+    $fp = fopen('zlib_requested.new', 'w');
     while (true) {
         echo "$page\n";
         $url = "https://$zlibHost/requests?page=$page";

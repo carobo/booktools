@@ -91,9 +91,9 @@ function httpGet($url, $postfields=null, $headers=[]) {
     curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_BUFFERSIZE, 1 << 18);
     curl_setopt($ch, CURLOPT_MAX_RECV_SPEED_LARGE, 1 << 18);
-    curl_setopt($ch, CURLOPT_LOW_SPEED_LIMIT, 10);
-    curl_setopt($ch, CURLOPT_LOW_SPEED_TIME, 10);
-    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+    curl_setopt($ch, CURLOPT_LOW_SPEED_LIMIT, 30);
+    curl_setopt($ch, CURLOPT_LOW_SPEED_TIME, 30);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 30);
     curl_setopt($ch, CURLOPT_TIMEOUT, TIMEOUT);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     // curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
@@ -1047,14 +1047,14 @@ function filesize_mib($path) {
 
 function reduce_file_size($path) {
     if (str_ends_with($path, '.epub')) {
-        $command = escape_command(['reduce_epub_size.sh', $path]);
+        $command = escape_command(['./reduce_epub_size.sh', $path]);
     } else if (has_extension($path, 'pdf')) {
         if (file_exists("$path.orig.pdf")) {
             echo "Looks already shrunk!\n";
             return true;
         } else {
             copy($path, "$path.orig.pdf");
-            $command = escape_command(['shrinkpdf.sh', '-r', '100', '-o', $path, "$path.orig.pdf"]);
+            $command = escape_command(['./shrinkpdf.sh', '-r', '100', '-o', $path, "$path.orig.pdf"]);
         }
     }
     else {
@@ -1065,6 +1065,7 @@ function reduce_file_size($path) {
     $oldsize = filesize_mib($path);
     echo "Shrinking $filename from $oldsize MiB...\n";
     passthru($command, $exit_code);
+    @unlink("$path.orig.pdf");
     clearstatcache(false, $path);
     $newsize = filesize_mib($path);
     echo "Shrunk $filename from $oldsize to $newsize MiB\n";
@@ -1118,11 +1119,6 @@ function filenameCleanup($filename, string $replacement = ''): string {
         $filename = $replacement . $filename;
     }
 
-    // 6. Final safety check: If the filename is empty after cleaning
-    if (empty($filename)) {
-        $filename = 'default_file';
-    }
-
     return $filename;
 }
 
@@ -1137,7 +1133,7 @@ function grepIsbns($txt) {
     if (preg_match_all('~DOI: 10.[1-9][0-9.]{3,10}/(\d{10,13})~i', $txt, $matches)) {
         $isbns = mergeIsbnsArray($isbns, $matches[1]);
     }
-    if (preg_match_all('~\D([0-9]{9}[0-9Xx])\D~i', $txt, $matches)) {
+    if (preg_match_all('~[/ ]([0-9]{9}[0-9Xx]) ~i', $txt, $matches)) {
         $isbns = mergeIsbnsArray($isbns, $matches[1]);
     }
     return $isbns;
@@ -1170,7 +1166,7 @@ function hasIsbn($isbn) {
 }
 
 function isRequested($isbn) {
-    return binarySearch('zlib_requested.txt', $isbn, 14, 13);
+    return binarySearch('libgen_requested.txt', $isbn, 14, 13) || binarySearch('zlib_requested.txt', $isbn, 14, 13);
 }
 
 function binarySearch($binfile, $isbn, $chunk_size, $match_size) {
@@ -1259,6 +1255,7 @@ function isValidISBN13(string $isbn): bool {
     }
 
     if (!str_starts_with($isbn, '9')) return false;
+    if ($isbn === '9780000000002') return false;
 
     $sum = 0;
 
@@ -1368,7 +1365,7 @@ function recursive_glob($dir, $patterns) {
         shuffle($files);
 
         foreach ($files as $file) {
-            if ($file === '.' || $file === '..') {
+            if ($file[0] === '.') {
                 continue;
             }
 
@@ -1655,6 +1652,10 @@ function isValidFile($path) {
         exec(escape_command(['file', '-bi', $path]), $output, $return_var);
         return str_starts_with($output[0], 'application/x-ms-reader');
     }
+    if (has_extension($path, 'cbz')) {
+        exec(escape_command(['unzip', '-l', $path]), $output, $return_var);
+        return $return_var == 0;
+    }
     throw new InvalidArgumentException($path);
 }
 
@@ -1717,4 +1718,14 @@ function chooseFormatToDownload($formats) {
         }
     }
     return null;
+}
+
+function hasBookExtension($path) {
+    $allowed_formats = ['epub', 'pdf', 'djvu', 'djv', 'mobi', 'txt', 'fb2', 'lit', 'rtf', 'azw', 'azw3', 'cbz'];
+    foreach ($allowed_formats as $ext) {
+        if (has_extension($path, $ext)) {
+            return true;
+        }
+    }
+    return false;
 }

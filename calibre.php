@@ -52,14 +52,11 @@ foreach ($libraries as $library) {
                         continue;
                     }
                 } else {
-                    continue;
-                }
-                if (!isRequested($isbn)) {
                     $search = cleanupSearchQuery($metadata['title'] . ' '. $metadata['author_sort']);
                     if (inAnnasArchive($search)) continue;
                 }
             } catch (Exception $e) {
-                continue;
+                // pass
             }
 
             $format = chooseFormatToDownload($metadata['formats']);
@@ -86,3 +83,5 @@ foreach ($libraries as $library) {
         }
     }
 }
+
+touch("$dir/calibre_processed.txt");

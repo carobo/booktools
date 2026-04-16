@@ -4,6 +4,13 @@ require_once('lib.php');
 $url_base = rtrim($argv[1], '/');
 echo "$url_base\n";
 
+$dir = getSiteDirectory(parse_url($url_base, PHP_URL_HOST));
+$existing = glob("$dir/*");
+if (!empty($existing)) {
+    echo "Already downloaded.\n";
+    // return;
+}
+
 $recent_url = "$url_base/api/recent";
 $json = httpGet($recent_url);
 $data = json_decode($json, true);
@@ -12,13 +19,6 @@ foreach ($data['books'] as $book) {
     $ids[] = $book['id'];
 }
 $highest_id = max($ids);
-
-$dir = getSiteDirectory(parse_url($url_base, PHP_URL_HOST));
-$existing = glob("$dir/*");
-if (!empty($existing)) {
-    echo "Already downloaded.\n";
-    return;
-}
 
 for ($i = 0; $i < $highest_id; $i++) {
     echo "\n$i/$highest_id ";
@@ -32,18 +32,28 @@ for ($i = 0; $i < $highest_id; $i++) {
     $metadata = $data['book'];
     $isbn = $metadata['isbn'] ?? '';
 
+    if (!isValidISBN($isbn)) continue;
+
+    if (str_contains($metadata['title'], 'z-lib')) continue;
+    if (str_contains($metadata['title'], 'z_lib')) continue;
+    if (str_contains($metadata['title'], 'Z_Lib')) continue;
+    if (str_contains($metadata['title'], 'Audiobook')) continue;
+
+    $requested = isValidISBN($isbn) && isRequested($isbn);
+
+    if (!$requested)
     try {
         if (isValidISBN($isbn)) {
             if (zlibHasIsbn($isbn) || inAnnasArchive($isbn)) {
                 echo "ISBN already present.";
                 continue;
             }
-        } else {
-            $search = cleanupSearchQuery($metadata['title'] . ' '. $metadata['author_sort']);
-            if (inAnnasArchive($search)) {
-                echo "title already present.";
-                continue;
-            }
+        }
+        
+        $search = cleanupSearchQuery($metadata['title'] . ' '. $metadata['author_sort']);
+        if (inAnnasArchive($search)) {
+            echo "title already present.";
+            continue;
         }
     } catch (Exception $e) {
         // pass
@@ -67,3 +77,4 @@ for ($i = 0; $i < $highest_id; $i++) {
     }
 }
 echo "\n";
+touch("$dir/talebook_processed.txt");
