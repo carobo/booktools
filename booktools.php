@@ -4,6 +4,8 @@ class DownloadException extends Exception { }
 class DecryptException extends DownloadException { }
 class FileInputOutputException extends Exception { }
 class UnexpectedResponseException extends Exception { }
+class UploadException extends Exception { }
+class FileAlreadyPresentException extends UploadException { }
 
 final class ProgressBar {
     private int $dotsDrawn = 0;

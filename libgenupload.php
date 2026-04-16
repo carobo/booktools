@@ -1,95 +1,47 @@
 <?php
 
-function checkExistence($path) {
-    $libgen_host = LIBGEN_HOST;
-    $md5 = strtoupper(md5_file($path));
-    $url = "https://genesis:upload@$libgen_host/api/check_existence/$md5";
-    $response = httpGet($url);
-    return $response !== "[]";
-}
-
-function uploadFile($path) {
-    $libgen_host = LIBGEN_HOST;
-    $url = "https://genesis:upload@$libgen_host/main/upload/";
-    $cfile = new CURLFile($path);
-    $data = ["file" => $cfile];
-
-    static $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    // curl_setopt($ch, CURLOPT_TIMEOUT, 3600);
-    curl_setopt($ch, CURLOPT_POST,1);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
-    // curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    // curl_setopt($ch, CURLOPT_HEADER, 1); // include headers in response
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        "Host: $libgen_host",
-        "Origin: https://$libgen_host",
-        "Referer: https://$libgen_host/",
-    ]);
-
-    ProgressBar::showFor($ch);
-
-    curl_exec($ch);
-    $redirect_url = curl_getinfo($ch, CURLINFO_REDIRECT_URL);
-    return $redirect_url;
-}
-
-function formSubmitMetadata($url, $metadata) {
-    $libgen_host = LIBGEN_HOST;
-    $formHtml = httpGet($url);
-    $formData = getFormValues($formHtml);
-    foreach ($formData as $key => $value) {
-        if (isset($metadata[$key]) && (empty($formData[$key]) || !empty($metadata[$key]))) {
-            $formData[$key] = $metadata[$key];
-        }
-    }
-
-    // post formData to $url
-    static $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_TIMEOUT, TIMEOUT);
-    curl_setopt($ch, CURLOPT_POST, 1);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $formData);
-    // curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    // curl_setopt($ch, CURLOPT_HEADER, 1); // include headers in response
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        "Host: $libgen_host",
-        "Origin: https://$libgen_host",
-        "Referer: https://$libgen_host/",
-    ]);
-    curl_exec($ch);
-    $redirect_url = curl_getinfo($ch, CURLINFO_REDIRECT_URL);
-    return $redirect_url;
-}
-
-function lgpSubmitMetadata($ftp_path, $metadata) {
+function lgpWebUploadFile($path, $metadata) {
     $libgen_host = LIBGEN_HOST;
     $lgp_session_id = LIBGEN_SESSIONID;
 
     $url = "https://$libgen_host/librarian.php";
-    $pre_lg_topic = $metadata['pre_lg_topic'] ?? 'l';
-    $formData = [
-        'pre_lg_topic' => $pre_lg_topic,
+    $cfile = new CURLFile($path);
+    $data = [
+        "pre_lg_topic" => $metadata['pre_lg_topic'] ?? 'l',
         'action' => 'add',
         'object' => 'ftoe',
-        'ftppath' => $ftp_path,
+        'ftppath' => '',
+        'ftoe_id' => '',
+        'uploadedfile' => $cfile,
+    ];
+    $headers = [
+        "Cookie: phpbb3_9na6l_u=1602; phpbb3_9na6l_k=; phpbb3_9na6l_sid=$lgp_session_id",
     ];
 
-    static $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_TIMEOUT, TIMEOUT);
-    curl_setopt($ch, CURLOPT_POST, 1);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $formData);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    // curl_setopt($ch, CURLOPT_HEADER, 1); // include headers in response
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        "Host: $libgen_host",
-        "Origin: https://$libgen_host",
-        "Referer: https://$libgen_host/librarian.php",
-        "User-Agent: Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:146.0) Gecko/20100101 Firefox/146.0",
-        "Cookie: phpbb3_9na6l_u=1602; phpbb3_9na6l_k=; phpbb3_9na6l_sid=$lgp_session_id",
-    ]);
-    $formHtml = curl_exec($ch);
+    $response = httpGet($url, $data, $headers);
+
+    if (empty($response)) {
+        throw new UploadException("upload failed");
+    }
+
+    if (preg_match_all('~<div class="alert alert-danger" role="alert">(.*?)</div>~', $response, $matches)) {
+        if (isset($matches[1][1])) {
+            $error = $matches[1][1];
+            if (str_contains($error, 'Such a file is already in database.')) {
+                throw new FileAlreadyPresentException($error);
+            }
+            throw new UploadException($error);
+        }
+    }
+
+    return $response;
+}
+
+function lgpFormSubmitMetadata($formHtml, $metadata) {
+    $libgen_host = LIBGEN_HOST;
+    $lgp_session_id = LIBGEN_SESSIONID;
+
+    $url = "https://$libgen_host/librarian.php";
 
     if (empty($formHtml)) {
         throw new UploadException("empty form");
@@ -123,20 +75,11 @@ function lgpSubmitMetadata($ftp_path, $metadata) {
     }
 
     $formData['new_1_101'] = getLanguageCode($metadata['language']);
+    $headers = [
+        'Cookie: phpbb3_9na6l_u=1602; phpbb3_9na6l_k=; phpbb3_9na6l_sid=' . LIBGEN_SESSIONID,
+    ];
 
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_TIMEOUT, TIMEOUT);
-    curl_setopt($ch, CURLOPT_POST, 1);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $formData);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    // curl_setopt($ch, CURLOPT_HEADER, 1); // include headers in response
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        "Host: $libgen_host",
-        "Origin: https://$libgen_host",
-        "Referer: https://$libgen_host/",
-        "Cookie: phpbb3_9na6l_sid=$lgp_session_id",
-    ]);
-    $response = curl_exec($ch);
+    $response = httpGet($url, $formData, $headers);
 
     if (preg_match_all('~<div class="alert alert-danger" role="alert">([^<]*)</div>~', $response, $matches)) {
         if (isset($matches[1][1])) var_dump($matches[1][1]);
@@ -145,7 +88,27 @@ function lgpSubmitMetadata($ftp_path, $metadata) {
     return str_contains($response, 'The file is added in a repository successfully');
 }
 
-function ftpUpload($path, $metadata) {
+function lgpLoadFtpPath($ftp_path, $metadata) {
+    $libgen_host = LIBGEN_HOST;
+    $lgp_session_id = LIBGEN_SESSIONID;
+
+    $url = "https://$libgen_host/librarian.php";
+    $pre_lg_topic = $metadata['pre_lg_topic'] ?? 'l';
+    $formData = [
+        'pre_lg_topic' => $pre_lg_topic,
+        'action' => 'add',
+        'object' => 'ftoe',
+        'ftppath' => $ftp_path,
+    ];
+    $headers = [
+        'Cookie: phpbb3_9na6l_u=1602; phpbb3_9na6l_k=; phpbb3_9na6l_sid=' . LIBGEN_SESSIONID,
+    ];
+
+    $formHtml = httpGet($url, $formData, $headers);
+    return $formHtml;
+}
+
+function lgpFtpUpload($path, $metadata) {
     $newtitle = createFtpFileName($path, $metadata);
     echo "FTP upload to libgen..";
 
@@ -159,7 +122,9 @@ function ftpUpload($path, $metadata) {
 
     if ($res)
         try {
-            $res = lgpSubmitMetadata($dest, $metadata);
+            $formHtml = lgpLoadFtpPath($dest, $metadata);
+            echo '.';
+            $res = lgpFormSubmitMetadata($formHtml, $metadata);
         } catch (Exception $e) {
             echo $e."\n";
             $res = false;
@@ -174,29 +139,10 @@ function ftpUpload($path, $metadata) {
     return $res;
 }
 
-function formUpload($path, $metadata) {
-    if (checkExistence($path)) {
-        echo "Already exists in libgen.\n";
-        return true;
-    }
-    $url = uploadFile($path);
-    // if (empty($url)) {
-    //     echo "Upload failed. Retry:\n";
-    //     $url = uploadFile($path);
-    // }
-    if (empty($url)) {
-        throw new UploadException("upload failed");
-    }
-
-    $url2 = formSubmitMetadata($url, $metadata);
-    var_dump($url2);
-    if (!empty($url2)) {
-        echo "Submitted metadata.\n";
-        return true;
-    } else {
-        // system("xdg-open $url");
-        return false;
-    }
+function lgpWebUpload($path, $metadata) {
+    $formHtml = lgpWebUploadFile($path, $metadata);
+    echo '.';
+    return lgpFormSubmitMetadata($formHtml, $metadata);
 }
 
 function upload($path, $metadata) {
@@ -205,26 +151,53 @@ function upload($path, $metadata) {
     }
 
     $zlib = false;
+    $web = false;
     $ftp = false;
 
-    if (!empty($metadata['authors'])) {
+    if (defined('ZLIB_UPLOAD') && ZLIB_UPLOAD) {
         try {
             zlibUpload($path, $metadata);
             $zlib = true;
+        } catch (FileAlreadyPresentException $e) {
+            echo " already present.\n";
+            $zlib = true; 
         } catch (UploadException $e) {
-            echo $e."\n";
+            echo " failed: $e\n";
             $zlib = false;
         }
     }
 
-    try {
-        $ftp = ftpUpload($path, $metadata);
-    } catch (UploadException $e) {
-        echo $e."\n";
-        $ftp = false;
+    if (!$zlib || (defined('LIBGEN_UPLOAD') && LIBGEN_UPLOAD)) {
+        if (filesize($path) < 10000000) {
+            echo "Web upload to libgen...";
+            try {
+                $web = lgpWebUpload($path, $metadata);
+                if ($web) echo " success.\n";
+            } catch (FileAlreadyPresentException $e) {
+                echo " already present.\n";
+                $web = true;
+            } catch (UploadException $e) {
+                echo " failed: $e\n";
+                $web = false;
+            }
+        }
+
+        if (!$web) {
+            echo "FTP upload to libgen...";
+            try {
+                $ftp = lgpFtpUpload($path, $metadata);
+                if ($ftp) echo " success.\n";
+            } catch (FileAlreadyPresentException $e) {
+                echo " already present.\n";
+                $ftp = true;
+            } catch (UploadException $e) {
+                echo " failed: $e\n";
+                $ftp = false;
+            }
+        }
     }
 
-    return $ftp || $zlib;
+    return $ftp || $web || $zlib;
 }
 
 function libgenTopics() {
@@ -237,4 +210,20 @@ function libgenTopics() {
         'm' => 'Magazines',
         's' => 'Standards',
     ];
+}
+
+function libgenGetRequestedBooks() {
+    $html = httpGet('https://libgen.bz/index.php?req=mode:req&curtab=e');
+    $isbns = grepIsbns($html);
+    sort($isbns);
+    $fp = fopen('libgen_requested.txt', 'w');
+    foreach ($isbns as $isbn) {
+        if (strlen($isbn) != 13) {
+            $isbn = convertISBN10toISBN13($isbn);
+        }
+        if (strlen($isbn) == 13) {
+            fwrite($fp, "$isbn\n");
+        }
+    }
+    fclose($fp);
 }

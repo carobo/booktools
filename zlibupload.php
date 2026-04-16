@@ -192,7 +192,10 @@ function zlibUploadFile($path)
 
     $decoded = json_decode($response);
     if (empty($decoded) || empty($decoded->success)) {
-        throw new UploadException($response);
+        if (str_starts_with($decoded->error, 'This book already exist:')) {
+            throw new FileAlreadyPresentException($decoded->error);
+        }
+        throw new UploadException($decoded->error ?? $response);
     }
 
     return $decoded->book;
@@ -303,11 +306,10 @@ function zlibUpload($path, &$metadata) {
 
     try {
         return zlibWebUpload($path, $metadata);
+    } catch (FileAlreadyPresentException $e) {
+        throw $e;
     } catch (Exception $e) {
         var_dump($e);
-        if (str_contains($e->getMessage(), 'This book already exist:')) {
-            return true;
-        }
         return zlibFtpUpload($path, $metadata);
     }
 }
