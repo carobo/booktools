@@ -91,9 +91,9 @@ function httpGet($url, $postfields=null, $headers=[]) {
     curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_BUFFERSIZE, 1 << 18);
     curl_setopt($ch, CURLOPT_MAX_RECV_SPEED_LARGE, 1 << 18);
-    curl_setopt($ch, CURLOPT_LOW_SPEED_LIMIT, 30);
-    curl_setopt($ch, CURLOPT_LOW_SPEED_TIME, 30);
-    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 30);
+    curl_setopt($ch, CURLOPT_LOW_SPEED_LIMIT, 10);
+    curl_setopt($ch, CURLOPT_LOW_SPEED_TIME, 180);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
     curl_setopt($ch, CURLOPT_TIMEOUT, TIMEOUT);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     // curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
@@ -1674,13 +1674,14 @@ function createFileName($id, $isbn, $title, $author, $extension) {
         $extension = pathinfo($extension, PATHINFO_EXTENSION);
     }
 
+    $random = base_convert(random_int(0, 1296), 10, 36);
     $isbn = str_replace('-', '', $isbn);
     $isbn = filenameCleanup($isbn);
     $title = filenameCleanup($title ?? '');
     $author = filenameCleanup($author ?? '');
-    $newtitle = "$id $isbn $title - $author";
+    $newtitle = "$random $id $isbn $title - $author";
     if (empty($author) || strlen($newtitle) >= 240) {
-        $newtitle = "$id $isbn $title";
+        $newtitle = "$random $id $isbn $title";
     }
     $newtitle = trim(substr($newtitle, 0, 240));
     return $newtitle . ".$extension";

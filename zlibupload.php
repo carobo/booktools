@@ -200,12 +200,17 @@ function zlibUploadFile($path)
     $url  = "https://$zlibHost/papi/book-temporary/upload";
     $data = ['file' => new CURLFile($path)];
 
-    // Delegate the cURL call to the helper.
     $response = zlibHttpRequest($url, $data);
 
     $decoded = json_decode($response);
     if (empty($decoded) || empty($decoded->success)) {
-        if (str_starts_with($decoded->error, 'This book already exist:')) {
+        if (preg_match('/{"success":.*}/', $response, $matches)) {
+            $decoded = json_decode($matches[0]);
+        }
+    }
+
+    if (empty($decoded) || empty($decoded->success)) {
+        if (isset($decoded->error) && str_starts_with($decoded->error, 'This book already exist:')) {
             throw new FileAlreadyPresentException($decoded->error);
         }
         throw new UploadException($decoded->error ?? $response);

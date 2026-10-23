@@ -110,7 +110,6 @@ function lgpLoadFtpPath($ftp_path, $metadata) {
 
 function lgpFtpUpload($path, $metadata) {
     $newtitle = createFtpFileName($path, $metadata);
-    echo "FTP upload to libgen..";
 
     $dest = LIBGEN_FTP_URL . $newtitle;
     $res = copy($path, $dest);
@@ -120,7 +119,7 @@ function lgpFtpUpload($path, $metadata) {
         $res = file_exists($dest);
     }
 
-    if ($res)
+    if ($res) {
         try {
             $formHtml = lgpLoadFtpPath($dest, $metadata);
             echo '.';
@@ -129,11 +128,6 @@ function lgpFtpUpload($path, $metadata) {
             echo $e."\n";
             $res = false;
         }
-
-    if ($res) {
-        echo " success.\n";
-    } else {
-        echo " failed.\n";
     }
 
     return $res;
@@ -146,7 +140,7 @@ function lgpWebUpload($path, $metadata) {
 }
 
 function upload($path, $metadata) {
-    if (filesize($path) < 12000) {
+    if (filesize($path) < 22000) {
         throw new UploadException("file too small");
     }
 
@@ -161,7 +155,7 @@ function upload($path, $metadata) {
         } catch (FileAlreadyPresentException $e) {
             echo " already present.\n";
             $zlib = true; 
-        } catch (UploadException $e) {
+        } catch (Exception $e) {
             echo " failed: $e\n";
             $zlib = false;
         }
@@ -176,7 +170,7 @@ function upload($path, $metadata) {
             } catch (FileAlreadyPresentException $e) {
                 echo " already present.\n";
                 $web = true;
-            } catch (UploadException $e) {
+            } catch (Exception $e) {
                 echo " failed: $e\n";
                 $web = false;
             }
@@ -190,7 +184,7 @@ function upload($path, $metadata) {
             } catch (FileAlreadyPresentException $e) {
                 echo " already present.\n";
                 $ftp = true;
-            } catch (UploadException $e) {
+            } catch (Exception $e) {
                 echo " failed: $e\n";
                 $ftp = false;
             }
