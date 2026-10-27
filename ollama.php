@@ -127,31 +127,37 @@ Output a JSON object with document_type, title, authors, series, volume, issue, 
 
     $response = ollamaQuery($prompt, $images);
 
+    $model_response = null;
     if (preg_match('~{.*}~s', $response, $matches)) {
-        $model_response = json_decode($matches[0], true);
-        if (is_array($model_response)) {
-            foreach ($model_response as $key => $value) {
+        $decoded = json_decode($matches[0], true);
+        if (is_array($decoded)) {
+            foreach ($decoded as $key => $value) {
                 if (is_array($value)) {
                     $string_value = @implode('; ', $value);
                     if (str_contains($string_value, 'Array')) {
-                        $model_response[$key] = null;
+                        $decoded[$key] = null;
                     } else {
-                        $model_response[$key] = $string_value;
+                        $decoded[$key] = $string_value;
                     }
                 }
             }
+            $model_response = $decoded;
+            if (!empty($model_response['title'])) {
+                return $model_response;
+            }
         }
-
-        return $model_response;
     }
 
     if ($with_cover && !empty($images)) {
         // Try again without cover image
         echo "Failed, trying again without cover image... ";
-        return ollamaMetadata($path, $metadata, false, $document_type);
+        $retry = ollamaMetadata($path, $metadata, false, $document_type);
+        if ($retry !== null) {
+            return $retry;
+        }
     }
 
-    return null;
+    return $model_response;
 }
 
 function ollamaIsbns($path) {

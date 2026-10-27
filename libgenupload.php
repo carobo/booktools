@@ -37,6 +37,23 @@ function lgpWebUploadFile($path, $metadata) {
     return $response;
 }
 
+function lgpClearIssueOnlyFields(&$formData, $metadata) {
+    $document_type = normalizeDocumentType($metadata['document_type'] ?? null);
+    if (!in_array($document_type, ['journal', 'magazine'], true)) {
+        return;
+    }
+
+    // Libgen may auto-fill these from the first article in a complete issue.
+    // They do not describe the issue itself.
+    $formData['doi'] = '';
+    $formData['issue_first_page'] = '';
+    $formData['issue_last_page'] = '';
+    if (isset($formData['new_1_901'])) {
+        $formData['new_1_901'] = '';
+    }
+    $formData['new_1_505'] = '';
+}
+
 function lgpFormSubmitMetadata($formHtml, $metadata) {
     $libgen_host = LIBGEN_HOST;
     $lgp_session_id = LIBGEN_SESSIONID;
@@ -63,6 +80,8 @@ function lgpFormSubmitMetadata($formHtml, $metadata) {
     $formData['pre_lg_topic'] = $libgen_topic;
     $formData['libgen_topic'] = $libgen_topic;
     $formData['type'] = lgpEditionType($metadata);
+
+    lgpClearIssueOnlyFields($formData, $metadata);
     $isbns = mergeIsbnsArray($metadata['isbn']);
     for ($i = 1; $i <= count($isbns); $i++) {
         $formData["new_{$i}_505"] = $isbns[$i- 1];

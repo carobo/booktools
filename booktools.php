@@ -232,7 +232,7 @@ function mergeMetadata(...$metadatas) {
             }
         }
     }
-    $result['authors'] = $result['author'] = $result['authors'] ?? $result['author'];
+    $result['authors'] = $result['author'] = $result['authors'] ?? $result['author'] ?? null;
     return $result;
 }
 
@@ -685,15 +685,17 @@ function pdfToText($path) {
     }
     $text = '';
 
+    $numPages = (int) numberOfPages($path);
+    $first_page_count = $numPages > 0 ? min(11, $numPages) : 11;
+
     $cmd = escape_command([
-        'pdftotext', '-f', '1', '-l', '11', '-nodiag', $path, '-'
+        'pdftotext', '-f', '1', '-l', (string) $first_page_count, '-nodiag', $path, '-'
     ]);
     $text .= `$cmd`;
 
-    $numPages = numberOfPages($path);
-    if ($numPages) {
+    if ($numPages > $first_page_count) {
         $cmd = escape_command([
-            'pdftotext', '-f', $numPages, '-l', $numPages, '-nodiag', $path, '-'
+            'pdftotext', '-f', (string) $numPages, '-l', (string) $numPages, '-nodiag', $path, '-'
         ]);
         $text .= `$cmd`;
     }
@@ -702,30 +704,34 @@ function pdfToText($path) {
         $subset_path = replace_extension($path, 'subset.pdf.tmp');
         $subset_text = replace_extension($path, 'subset.pdf.txt');
 
-        // $command = "pdftk '$path' cat 1-11 $numPages output '$subset_path'";
-        if ($numPages) {
-            $command = escape_command([
-                "pdftk", $path, 'cat', '1-11', $numPages, 'output', $subset_path
-            ]);
-        } else {
-            $command = escape_command([
-                "pdftk", $path, 'cat', '1-11', 'output', $subset_path
-            ]);
+        $cat_args = ["pdftk", $path, 'cat', "1-$first_page_count"];
+        if ($numPages > $first_page_count) {
+            $cat_args[] = (string) $numPages;
         }
-        passthru($command);
+        $cat_args[] = 'output';
+        $cat_args[] = $subset_path;
+        $command = escape_command($cat_args);
+        passthru($command, $pdftk_return);
 
-        // $command = "ocrmypdf -l 'eng+rus+deu+fra+kor+kaz+kir+lat' --output-type none --force-ocr --sidecar '$subset_text' '$subset_path' -";
-        $languages = 'eng+rus+deu+fra+kor+kaz+kir+mon';
-        // $languages = 'eng';
-        $command = escape_command([
-            "ocrmypdf", '--jobs', '2', '-l', $languages, '--output-type', 'none', '--force-ocr', '--sidecar', $subset_text, $subset_path, "-"
-        ]);
-        passthru($command);
+        if ($pdftk_return === 0 && is_file($subset_path)) {
+            // $languages = 'eng+rus+ara';
+            $languages = 'eng';
+            $command = escape_command([
+                "ocrmypdf", '--jobs', '2', '-l', $languages, '--output-type', 'none', '--force-ocr', '--sidecar', $subset_text, $subset_path, "-"
+            ]);
+            passthru($command);
 
-        $text .= file_get_contents($subset_text);
-
-        unlink($subset_text);
-        unlink($subset_path);
+            if (is_file($subset_text)) {
+                $ocr_text = file_get_contents($subset_text);
+                if ($ocr_text !== false) {
+                    $text .= $ocr_text;
+                }
+                unlink($subset_text);
+            }
+            if (is_file($subset_path)) {
+                unlink($subset_path);
+            }
+        }
     }
 
     $back = pdfBackCover($path);
@@ -1017,6 +1023,92 @@ function getIssnFromFile($path) {
         return array_values(array_unique(array_map('strtoupper', $matches[1])));
     }
     return [];
+}
+
+function getJournalTitleFromIssn($issns) {
+    static $cache = [];
+
+    $issns = cleanIssns($issns);
+    if (empty($issns)) {
+        return null;
+    }
+    $issn = $issns[0];
+    if (array_key_exists($issn, $cache)) {
+        return $cache[$issn];
+    }
+
+    $title = null;
+    try {
+        $url = 'https://api.crossref.org/journals/' . urlencode($issn);
+        $response = httpGet($url);
+        $decoded = json_decode($response, true);
+        $value = $decoded['message']['title'] ?? null;
+        if (is_array($value)) {
+            $value = reset($value);
+        }
+        if (is_string($value) && trim($value) !== '') {
+            $title = trim($value);
+        }
+    } catch (Exception $e) {
+        // Crossref is a best-effort enrichment; ignore failures.
+    }
+
+    $cache[$issn] = $title;
+    return $title;
+}
+
+/**
+ * Detects a complete journal issue from its cover/table-of-contents pages.
+ * Requires a table of contents and an explicit volume/issue header so that
+ * a single article with the same running header is not misclassified.
+ */
+function getJournalIssueMetadataFromFile($path, $text = null, $issns = null) {
+    $pages = numberOfPages($path);
+    if ($pages !== null && $pages < 24) {
+        return null;
+    }
+
+    if ($text === null) {
+        $text = fileToText($path);
+    }
+    $head = substr($text, 0, 30000);
+
+    $has_toc = preg_match('~\bPARTICULAR\b~i', $head) && preg_match('~\bPAGE\s*NO\b~i', $head);
+    if (!$has_toc) {
+        return null;
+    }
+
+    if (!preg_match('~\bVol\.?\s*([0-9]+)\s*(?:Issue|No\.?)\s*([0-9]+)(?:\s*,\s*([A-Za-z]+))?\s*([12][0-9]{3})~i', $head, $matches)) {
+        return null;
+    }
+
+    if ($issns === null) {
+        $issns = getIssnFromFile($path);
+    }
+    $issns = cleanIssns($issns);
+    $series = getJournalTitleFromIssn($issns);
+
+    $volume = $matches[1];
+    $issue = $matches[2];
+    $month = $matches[3] ?? '';
+    $year = $matches[4];
+
+    $title = "Volume $volume, Issue $issue";
+    if ($month !== '') {
+        $title .= ", $month $year";
+    } else {
+        $title .= ", $year";
+    }
+
+    return [
+        'document_type' => 'journal',
+        'title' => $title,
+        'series' => $series,
+        'volume' => $volume,
+        'issue' => $issue,
+        'year' => $year,
+        'issn' => $issns,
+    ];
 }
 
 /**
