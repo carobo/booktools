@@ -18,8 +18,8 @@ function ollamaQuery($prompt, $images=[]) {
         }
     }
 
-    $system = 'You are an expert metadata extraction system for books.
-    Provide the requested information about the book, given the context in the user prompt.
+    $system = 'You are an expert metadata extraction system for books, scientific articles, journals and magazines.
+    Provide the requested information about the document, given the context in the user prompt.
     The response will be read by a computer, not by a human, so respond with either JSON or keywords.';
 
     $ollama_url = 'http://localhost:9931/v1/chat/completions';
@@ -50,7 +50,7 @@ function ollamaQuery($prompt, $images=[]) {
     return $api_response['choices'][0]['message']['content'];
 }
 
-function ollamaMetadata($path, $metadata=[], $with_cover=true) {
+function ollamaMetadata($path, $metadata=[], $with_cover=true, $document_type=null) {
     $text = fileToText($path);
     $text = cleanup_for_ollama($text);
 
@@ -68,32 +68,53 @@ function ollamaMetadata($path, $metadata=[], $with_cover=true) {
         'title' => '',
         'authors' => '',
         'publisher' => '',
+        'series' => '',
         'edition' => '',
         'volume' => '',
+        'issue' => '',
+        'first_page' => '',
+        'last_page' => '',
+        'doi' => '',
+        'issn' => '',
         'year' => '',
         'language' => '',
     ];
     foreach ($examples as $key => $value) {
         if (!empty($metadata[$key])) {
-            $examples[$key] = " (e.g. \"$metadata[$key]\")";
+            $example = $metadata[$key];
+            if (is_array($example)) {
+                $example = implode(', ', $example);
+            }
+            $examples[$key] = " (e.g. \"$example\")";
         }
     }
 
     $topics = libgenTopics();
     $topics_text = '"' . implode('", "', $topics) . '"';
+    $type_hint = '';
+    if (!empty($document_type)) {
+        $type_hint = " This document has already been classified as \"$document_type\".\n";
+    }
 
-    $prompt = "You are an expert metadata extraction system. Your task is to extract the document's metadata from the provided text. For all fields except language and category, use a literal copy of text found in the input, do not hallicinate or infer. The title and authors fields are most critical. If any requested value is not found or seems incorrect or illegible, omit it from the output. Return the output in the requested JSON format. If a value is all upper case, convert it to title case. Return a JSON object with these keys:
-
-    title: title of the book, including the subtitle if the book has one$examples[title];
+    $prompt = "You are an expert metadata extraction system. Your task is to extract the document's metadata from the provided text. For all fields except document_type, language and category, use a literal copy of text found in the input, do not hallucinate or infer. The title and authors fields are most critical. If any requested value is not found or seems incorrect or illegible, omit it from the output. Return the output in the requested JSON format. If a value is all upper case, convert it to title case. Return a JSON object with these keys:
+$type_hint
+    document_type: one of \"book\", \"article\", \"journal\", \"magazine\". Use \"article\" for a single scientific or scholarly article/paper. Use \"journal\" for a complete issue or volume of a journal. Use \"magazine\" for a complete issue of a magazine or a popular periodical.
+    title: title of the book or article, including the subtitle if it has one. For a complete journal or magazine issue, use a descriptive title such as \"Volume 11, Number 1\" if the issue has no separate title$examples[title];
     authors: string with semicolon-separated list of author names, without titles or place names$examples[authors];
-    publisher: name of the company that published the book$examples[publisher];
+    series: name of the journal, magazine or book series the document belongs to$examples[series];
+    volume: the volume of this document in a series, if available$examples[volume];
+    issue: the issue or number within the volume, if available$examples[issue];
     edition: the revision or edition of the book, preferably as a number$examples[edition];
-    volume: the volume of this book in a series, if available$examples[volume];
-    year: the year this book was published$examples[year];
-    language: the English name for the language this book is written in$examples[language].
+    first_page: the first page number of an article in the journal$examples[first_page];
+    last_page: the last page number of an article in the journal$examples[last_page];
+    doi: DOI of the article, if present$examples[doi];
+    issn: ISSN of the journal or magazine, if present$examples[issn];
+    publisher: name of the company that published the book or journal$examples[publisher];
+    year: the year this document was published$examples[year];
+    language: the English name for the language this document is written in$examples[language].
     category: one of $topics_text
 
-Below is the text from the first pages of the book. Extract the following fields literally from the text: title, authors, publisher, edition, volume, and year. Infer the value for language and category.
+Below is the text from the first pages of the document. Extract the following fields literally from the text: title, authors, series, volume, issue, edition, first_page, last_page, doi, issn, publisher and year. Infer the values for document_type, language and category.
 
 ## File: $filename
 
@@ -101,7 +122,7 @@ Below is the text from the first pages of the book. Extract the following fields
 $text
 ```
 
-Output a JSON with title, authors, publisher, edition, volume, year and language (all strings) for this book.
+Output a JSON object with document_type, title, authors, series, volume, issue, edition, first_page, last_page, doi, issn, publisher, year, language and category (all strings) for this document.
     ";
 
     $response = ollamaQuery($prompt, $images);
@@ -127,7 +148,7 @@ Output a JSON with title, authors, publisher, edition, volume, year and language
     if ($with_cover && !empty($images)) {
         // Try again without cover image
         echo "Failed, trying again without cover image... ";
-        return ollamaMetadata($path, $metadata, false);
+        return ollamaMetadata($path, $metadata, false, $document_type);
     }
 
     return null;
@@ -166,13 +187,13 @@ function ollamaLibgenTopic($path, $metadata) {
     $topics = libgenTopics();
     $topics_text = '"' . implode('", "', $topics) . '"';
     
-    $prompt = "Below is metadata for a book. Determine which category this book falls in to. The categories are $topics_text. Omit an explanation, output only the best-fitting category.
+    $prompt = "Below is metadata for a document. Determine which category this document falls in to. The categories are $topics_text. Omit an explanation, output only the best-fitting category.
 
 ```json
 $metadata_json
 ```
 
-Output the most fitting category for this book: $topics_text";
+Output the most fitting category for this document: $topics_text";
 
     $response = ollamaQuery($prompt);
 
@@ -183,6 +204,106 @@ Output the most fitting category for this book: $topics_text";
         }
     }
     return null;
+}
+
+/**
+ * Asks the LLM whether a short document is an article/journal, or something
+ * else (a presentation, balance sheet, report, ...).
+ *
+ * @return string|null One of book, article, journal, magazine, other, or null.
+ */
+function ollamaDocumentType($path, $metadata=[]) {
+    $text = fileToText($path);
+    $text = cleanup_for_ollama($text);
+
+    $images = [];
+    $cover = fileCoverImage($path);
+    if ($cover) {
+        $images[] = $cover;
+    }
+
+    $metadata_json = json_encode($metadata, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $filename = basename($path);
+
+    $prompt = "Classify the document below. Choose exactly one of these values:
+- \"book\": a book, ebook, book chapter or monograph.
+- \"article\": a single scientific, scholarly or technical article/paper published in a journal, magazine or proceedings.
+- \"journal\": a complete issue or volume of an academic/scientific journal (containing several articles).
+- \"magazine\": a complete issue of a magazine, newsletter or other popular periodical.
+- \"other\": anything else, such as a presentation, slides, a balance sheet, a spreadsheet, a form, a catalogue, or a report that is not a published article.
+
+Use both the visual first page and the text. A document with an abstract, keywords, an introduction, a DOI or an ISSN in a journal header is usually an article or journal. A short PDF that is mostly slides, tables or financial figures is \"other\".
+
+Known metadata:
+```json
+$metadata_json
+```
+
+## File: $filename
+
+```text
+$text
+```
+
+Output only a JSON object like {\"document_type\": \"article\"}.";
+
+    $response = ollamaQuery($prompt, $images);
+
+    if (preg_match('~{.*}~s', $response, $matches)) {
+        $model_response = json_decode($matches[0], true);
+        if (is_array($model_response)) {
+            $type = normalizeDocumentType($model_response['document_type'] ?? null);
+            if ($type) {
+                return $type;
+            }
+        }
+    }
+
+    return normalizeDocumentType($response);
+}
+
+/**
+ * Ask the LLM to identify the journal/series when it was not printed in the
+ * document itself. Returns null when the model is not reasonably sure.
+ */
+function ollamaSeries($path, $metadata=[]) {
+    $text = fileToText($path);
+    $text = cleanup_for_ollama($text);
+    if (strlen($text) > 4000) {
+        $text = substr($text, 0, 4000);
+    }
+
+    $metadata_json = json_encode($metadata, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $filename = basename($path);
+
+    $prompt = "The following document is a journal article or a journal/magazine issue. The name of the journal or series was not found in its text. Identify the journal or series it was published in using the title, authors, filename and path.
+
+Only answer if you are reasonably confident. If you are not reasonably sure, output exactly: null
+Output only the journal or series name, without quotes, explanations or markdown.
+
+Known metadata:
+```json
+$metadata_json
+```
+
+## File: $filename
+## Path: $path
+
+```text
+$text
+```";
+
+    $response = trim(ollamaQuery($prompt));
+    $response = trim(explode("\n", $response)[0]);
+    $response = preg_replace('~^(journal|series)\s*[:=]\s*~i', '', $response);
+    $response = trim($response, " \t\n\r\0\x0B\"'`");
+    if ($response === '' || strtolower($response) === 'null' || str_contains(strtolower($response), 'not sure')) {
+        return null;
+    }
+    if (preg_match('~^(.+?)\s*\((?:[A-Z]{2,})\)$~', $response, $matches)) {
+        $response = trim($matches[1]);
+    }
+    return $response;
 }
 
 /**
@@ -199,14 +320,13 @@ function cleanup_for_ollama(string $text): string
     }
     // --- 1. Remove Emojis ---
     // Emojis often consume 4+ tokens each. This pattern handles most Unicode emojis.
-    // The \p{So} (Other_Symbol) category is key here, though it catches other symbols too.
-    $text = preg_replace('/[\p{So}\p{Lo}\p{Po}&&[^a-zA-Z0-9\s]]/u', '', $text);
+    $text = preg_replace('/[\p{So}\p{Cs}\p{Co}]/u', '', $text);
 
     // --- 3. Replace Remaining Non-ASCII/Non-Standard Characters ---
     // After normalization, remove anything that's still non-standard or might
     // confuse the tokenizer and force byte-level tokenization.
-    // This pattern keeps basic letters, numbers, standard punctuation, and spaces.
-    $text = preg_replace('/[^\p{L}\p{N}\p{P}\s]/u', '', $text);
+    // Keep letters, numbers, marks, standard punctuation, and spaces.
+    $text = preg_replace('/[^\p{L}\p{N}\p{M}\p{P}\s]/u', '', $text);
 
     // Reduce periods
     $text = preg_replace('/(\. ?)+/', '\1', $text);

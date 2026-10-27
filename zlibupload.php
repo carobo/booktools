@@ -4,15 +4,16 @@ $_zlibSessionData = [
     'cookies' => [],
 ];
 
-function existsInZlib($isbns) {
+function existsInZlib($query, $content_type = 'book') {
     $zlibHost = ZLIB_HOST;
 
-    if (is_string($isbns)) {
-        $isbns = [$isbns];
+    if (is_string($query)) {
+        $query = [$query];
     }
-    foreach ($isbns as $isbn) {
-        $result = zlibHttpRequest("https://$zlibHost/s/$isbn?e=1&selected_content_types%5B%5D=book");
-        if (preg_match('~Books&nbsp;\(([0-9]+)\)~', $result, $matches)) {
+    foreach ($query as $q) {
+        $result = zlibHttpRequest("https://$zlibHost/s/$q?e=1&selected_content_types%5B%5D=$content_type");
+        $label = $content_type === 'article' ? 'Articles' : 'Books';
+        if (preg_match('~' . $label . '&nbsp;\(([0-9]+)\)~', $result, $matches)) {
             if ($matches[1] > 0) {
                 return true;
             }
@@ -78,14 +79,28 @@ function zlibFtpCollection($id)
     return $files;
 }
 
-function zlibConfirm($book)
+function zlibContentType($metadata) {
+    return isArticleMetadata($metadata) ? 'article' : 'book';
+}
+
+function zlibFtpUrl($metadata) {
+    if (zlibContentType($metadata) === 'article') {
+        if (defined('ZLIB_FTP_URL_ARTICLES') && ZLIB_FTP_URL_ARTICLES) {
+            return ZLIB_FTP_URL_ARTICLES;
+        }
+        throw new UploadException("no article FTP bucket configured (ZLIB_FTP_URL_ARTICLES)");
+    }
+    return ZLIB_FTP_URL;
+}
+
+function zlibConfirm($book, $metadata = [])
 {
     $zlibHost = ZLIB_HOST;
     $id  = $book->id;
     $url = "https://$zlibHost/papi/book-temporary/{$id}/confirm";
 
     $postfields = [
-        'content_type' => 'book',
+        'content_type' => zlibContentType($metadata),
     ];
 
     return zlibHttpRequest($url, $postfields);
@@ -124,6 +139,7 @@ function zlibUploadCover($path, $book)
 function zlibSetMetadata($book, $metadata)
 {
     $zlibHost = ZLIB_HOST;
+    $content_type = zlibContentType($metadata);
 
     /* ------------------------------------------------------------------
      * 1  Build the form payload
@@ -147,18 +163,24 @@ function zlibSetMetadata($book, $metadata)
         $form[$key] = $metadata[$key] ?? $book->{$key};
     }
 
-    /* ISBN handling – may be a string or an array. */
-    $form['isbn'] = mergeIsbnsArray($metadata['isbn']);
-
-    /* Some metadata may contain ISSN values – merge them with the ISBNs. */
-    if (!empty($metadata['issn']) && is_array($metadata['issn'])) {
-        $form['isbn'] = array_merge($form['isbn'] ?? [], $metadata['issn']);
+    /* Identifiers. Books use ISBN/ASIN/ISSN, articles use a DOI. */
+    $identifiers = mergeIsbnsArray($metadata['isbn']);
+    $doi = cleanDoi($metadata['doi'] ?? null);
+    if ($doi && $content_type === 'article') {
+        $identifiers[] = $doi;
     }
+    $identifiers = array_merge($identifiers, cleanIssns($metadata['issn'] ?? []));
+    $form['isbn'] = array_values(array_unique(array_filter($identifiers)));
 
     /* Override a few keys that use slightly different names in the API. */
     $form['author']      = $metadata['authors'] ?? $metadata['author'] ?? '';
-    $form['language']    = strtolower($metadata['language']);
-    $form['content_type'] = 'book';
+    $form['language']    = strtolower($metadata['language'] ?? '');
+    $form['content_type'] = $content_type;
+
+    /* zlib has no separate issue field; store the issue as the edition. */
+    if ($content_type === 'article' && empty($form['edition']) && !empty($metadata['issue'])) {
+        $form['edition'] = $metadata['issue'];
+    }
 
     /* ------------------------------------------------------------------
      * 2  Make the request
@@ -244,7 +266,7 @@ function zlibMetadataFromIsbn($book)
 function zlibFtpUpload($path, $metadata) {
     echo "FTP upload to zlib... ";
     $filename = createFtpFileName($path, $metadata);
-    $result = copy($path, ZLIB_FTP_URL . $filename);
+    $result = copy($path, zlibFtpUrl($metadata) . $filename);
     if (!$result) {
         echo "failed.\n";
         throw new UploadException("zlib ftp upload");
@@ -267,12 +289,19 @@ function zlibWebUpload($path, $metadata) {
     $book = zlibUploadFile($path);
     echo "Sending metadata to zlib.";
     dotsleep();
-    $book = zlibSetFromMeta($book);
+    try {
+        $book = zlibSetFromMeta($book);
+    } catch (Exception $e) {
+        if (zlibContentType($metadata) === 'book') {
+            throw $e;
+        }
+        echo " Metadata lookup failed, continuing with extracted metadata.";
+    }
     dotsleep();
     if (empty($metadata['authors'])) {
         $metadata['authors'] = $book->author;
     }
-    if (empty($metadata['authors'])) {
+    if (empty($metadata['authors']) && zlibContentType($metadata) === 'book') {
         $fromZlib = zlibMetadataFromIsbn($book);
         echo '.';
         $metadata['authors'] = $fromZlib->book->author;
@@ -284,7 +313,7 @@ function zlibWebUpload($path, $metadata) {
     }
 
     if (defined('ZLIB_CONFIRM') && ZLIB_CONFIRM)
-        zlibConfirm($book);
+        zlibConfirm($book, $metadata);
 
     echo " done.\n";
     return true;
@@ -307,10 +336,13 @@ function zlibUpload($path, &$metadata) {
     if (empty($metadata['issn'])) {
         $metadata['issn'] = getIssnFromFile($path);
     }
+    if (empty($metadata['document_type']) && empty($metadata['isbn']) && !empty($metadata['doi'])) {
+        $metadata['document_type'] = 'article';
+    }
 
     if (preg_match('~/([0-9A-Fa-f]{32})\.~', $path, $matches)) {
         $md5 = $matches[1];
-        if (existsInZlib($md5)) {
+        if (existsInZlib($md5, zlibContentType($metadata))) {
             return true;
         }
     }

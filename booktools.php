@@ -971,19 +971,96 @@ function getPublisherFromFile($path) {
     return null;
 }
 
+function cleanDoi($doi) {
+    if (is_array($doi)) {
+        $doi = reset($doi);
+    }
+    if (!is_string($doi) || trim($doi) === '') {
+        return null;
+    }
+    if (preg_match('~10\.[0-9]{4,9}/\S+~i', $doi, $matches)) {
+        return rtrim($matches[0], '.,;:)]}>');
+    }
+    return null;
+}
+
+function cleanIssns($issns) {
+    if (empty($issns)) {
+        return [];
+    }
+    if (!is_array($issns)) {
+        $issns = preg_split('~\s*[,;]\s*~', (string) $issns);
+    }
+    $result = [];
+    foreach ($issns as $issn) {
+        if (preg_match('~[0-9]{4}-[0-9]{3}[0-9Xx]~', (string) $issn, $matches)) {
+            $result[] = strtoupper($matches[0]);
+        }
+    }
+    return array_values(array_unique($result));
+}
+
 function getDoiFromFile($path) {
     $txt = fileToText($path);
-    if (preg_match('~DOI: (10.[1-9][0-9.]{3,10}/\S+)~', $txt, $matches)) {
-        return $matches[1];
+    // Ignore DOIs from the reference list; we want the document's own DOI.
+    $parts = preg_split('~\n\s*(references|bibliography|works cited)\s*\n~i', $txt, 2);
+    $txt = substr($parts[0] ?? $txt, 0, 20000);
+    if (preg_match('~(?:https?://(?:dx\.)?doi\.org/|doi\s*[:=]\s*)(10\.[0-9]{4,9}/[^\s"<>]+)~i', $txt, $matches)) {
+        return cleanDoi($matches[1]);
     }
+    return null;
 }
 
 function getIssnFromFile($path) {
-    $txt = fileToText($path);
-    if (preg_match_all('~ISSN ([0-9]{4}-[0-9]{3}[0-9X])~', $txt, $matches)) {
-        return array_unique($matches[1]);
+    $txt = substr(fileToText($path), 0, 30000);
+    if (preg_match_all('~ISSN\s*[:.]?\s*(?:\([^)]*\)\s*)?([0-9]{4}-[0-9]{3}[0-9Xx])~i', $txt, $matches)) {
+        return array_values(array_unique(array_map('strtoupper', $matches[1])));
     }
     return [];
+}
+
+/**
+ * Normalizes the many ways an LLM or metadata source may describe a document.
+ */
+function normalizeDocumentType($type) {
+    if (is_array($type)) {
+        $type = reset($type);
+    }
+    $type = strtolower(trim((string) $type));
+    $type = trim(preg_replace('~[^a-z]+~', ' ', $type));
+    if ($type === '') {
+        return null;
+    }
+    if (preg_match('~\b(articles?|papers?|proceedings?|preprints?|peer review)\b~', $type)) {
+        return 'article';
+    }
+    if (preg_match('~\bmagazine\b~', $type)) {
+        return 'magazine';
+    }
+    if (preg_match('~\b(journal|periodical|serial|issue|volume)\b~', $type)) {
+        return 'journal';
+    }
+    if (preg_match('~\b(book|ebook|monograph|chapter)\b~', $type)) {
+        return 'book';
+    }
+    if (preg_match('~\b(presentation|report|form|datasheet|balance sheet|spreadsheet|other)\b~', $type)) {
+        return 'other';
+    }
+    return $type;
+}
+
+function isArticleDocumentType($type) {
+    $type = normalizeDocumentType($type);
+    return in_array($type, ['article', 'journal', 'magazine'], true);
+}
+
+function isArticleMetadata($metadata) {
+    $type = normalizeDocumentType($metadata['document_type'] ?? $metadata['content_type'] ?? null);
+    if ($type) {
+        return isArticleDocumentType($type);
+    }
+    // A DOI is a very strong signal that this is an article.
+    return !empty($metadata['doi']);
 }
 
 function ebook_polish($epub) {
@@ -1660,9 +1737,16 @@ function isValidFile($path) {
 }
 
 function createFtpFileName($path, $metadata) {
+    $identifier = $metadata['isbn'] ?? '';
+    if (empty($identifier) && !empty($metadata['doi'])) {
+        $identifier = $metadata['doi'];
+    }
+    if (empty($identifier) && !empty($metadata['issn'])) {
+        $identifier = $metadata['issn'];
+    }
     return createFileName(
         $metadata['id'] ?? null,
-        $metadata['isbn'],
+        $identifier,
         $metadata['title'],
         $metadata['authors'],
         $path
@@ -1672,6 +1756,10 @@ function createFtpFileName($path, $metadata) {
 function createFileName($id, $isbn, $title, $author, $extension) {
     if (str_contains($extension, '.')) {
         $extension = pathinfo($extension, PATHINFO_EXTENSION);
+    }
+
+    if (is_array($isbn)) {
+        $isbn = implode(', ', $isbn);
     }
 
     $random = base_convert(random_int(0, 1296), 10, 36);

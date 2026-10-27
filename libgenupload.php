@@ -59,22 +59,49 @@ function lgpFormSubmitMetadata($formHtml, $metadata) {
         }
     }
     $formData['author'] = $metadata['authors'] ?? '';
-    $formData['libgen_topic'] = 'l';
-    $formData['type'] = 'b';
+    $libgen_topic = lgpTopic($metadata);
+    $formData['pre_lg_topic'] = $libgen_topic;
+    $formData['libgen_topic'] = $libgen_topic;
+    $formData['type'] = lgpEditionType($metadata);
     $isbns = mergeIsbnsArray($metadata['isbn']);
     for ($i = 1; $i <= count($isbns); $i++) {
         $formData["new_{$i}_505"] = $isbns[$i- 1];
     }
 
-    if (!empty($metadata['issn'])) {
-        $issns = $metadata['issn'];
-        if (!is_array($issns)) $issns = explode(', ', $issns);
-        for ($i = 1; $i <= count($issns); $i++) {
-            $formData["new_{$i}_501"] = $issns[$i- 1];
+    $issns = cleanIssns($metadata['issn'] ?? []);
+    for ($i = 1; $i <= count($issns); $i++) {
+        $formData["new_{$i}_501"] = $issns[$i - 1];
+    }
+
+    if (isArticleMetadata($metadata)) {
+        $series = $metadata['series'] ?? $metadata['journal'] ?? null;
+        if (!empty($series)) {
+            $series_id = lgpEnsureSeriesId($series, $metadata, $libgen_topic);
+            if ($series_id) {
+                $formData['issue_s_id'] = $series_id;
+            }
+        }
+        if (!empty($metadata['volume'])) {
+            $formData['issue_volume'] = $metadata['volume'];
+        }
+        if (!empty($metadata['issue'])) {
+            $formData['issue_number'] = $metadata['issue'];
+        }
+        if (!empty($metadata['first_page'])) {
+            $formData['issue_first_page'] = $metadata['first_page'];
+        }
+        if (!empty($metadata['last_page'])) {
+            $formData['issue_last_page'] = $metadata['last_page'];
+        }
+        $doi = cleanDoi($metadata['doi'] ?? null);
+        if ($doi) {
+            $formData['doi'] = $doi;
         }
     }
 
-    $formData['new_1_101'] = getLanguageCode($metadata['language']);
+    if (!empty($metadata['language'])) {
+        $formData['new_1_101'] = getLanguageCode($metadata['language']);
+    }
     $headers = [
         'Cookie: phpbb3_9na6l_u=1602; phpbb3_9na6l_k=; phpbb3_9na6l_sid=' . LIBGEN_SESSIONID,
     ];
@@ -86,6 +113,132 @@ function lgpFormSubmitMetadata($formHtml, $metadata) {
     }
 
     return str_contains($response, 'The file is added in a repository successfully');
+}
+
+function lgpTopic($metadata) {
+    $topic = $metadata['pre_lg_topic'] ?? 'l';
+    if (isArticleMetadata($metadata)) {
+        $type = normalizeDocumentType($metadata['document_type'] ?? $metadata['content_type'] ?? null);
+        if ($type === 'magazine') {
+            return 'm';
+        }
+        if (!in_array($topic, ['a', 'm'], true)) {
+            return 'a';
+        }
+    }
+    return $topic;
+}
+
+function lgpEditionType($metadata) {
+    if (!empty($metadata['libgen_type'])) {
+        return $metadata['libgen_type'];
+    }
+    $type = normalizeDocumentType($metadata['document_type'] ?? null);
+    return match ($type) {
+        'article' => 'a',
+        'journal' => 'ji',
+        'magazine' => 'm',
+        default => 'b',
+    };
+}
+
+function lgpSeriesType($topic) {
+    return $topic === 'm' ? 'mag' : 'j';
+}
+
+function lgpNormalizeSeriesTitle($title) {
+    $title = html_entity_decode((string) $title, ENT_QUOTES | ENT_HTML5);
+    $title = preg_replace('~\s*\{\d+\}\s*$~', '', $title);
+    $previous = null;
+    while ($previous !== $title) {
+        $previous = $title;
+        $title = preg_replace('~\s*(?:\([^)]*\)|\[[^\]]*\])\s*$~', '', $title);
+    }
+    $title = mb_strtolower($title);
+    $title = preg_replace('~[^\p{L}\p{N}]+~u', ' ', $title);
+    return trim(preg_replace('~\s+~', ' ', $title));
+}
+
+function lgpFindSeriesId($title, $topic = 'a') {
+    $libgen_host = LIBGEN_HOST;
+    $lgp_session_id = LIBGEN_SESSIONID;
+    $headers = [
+        'Cookie: phpbb3_9na6l_u=1602; phpbb3_9na6l_k=; phpbb3_9na6l_sid=' . LIBGEN_SESSIONID,
+    ];
+
+    $url = "https://$libgen_host/jsonsearch.php?series=" . urlencode($title);
+    $response = httpGet($url, null, $headers);
+    $results = json_decode($response, true);
+    if (!is_array($results)) {
+        return null;
+    }
+
+    $wanted = lgpNormalizeSeriesTitle($title);
+    foreach ($results as $result) {
+        $candidate = $result['value'] ?? '';
+        if (lgpNormalizeSeriesTitle($candidate) === $wanted) {
+            return $result['id'] ?? null;
+        }
+    }
+    return null;
+}
+
+function lgpEnsureSeriesId($title, $metadata, $topic = 'a') {
+    static $cache = [];
+
+    $key = "$topic:" . lgpNormalizeSeriesTitle($title);
+    if (array_key_exists($key, $cache)) {
+        return $cache[$key];
+    }
+
+    $id = lgpFindSeriesId($title, $topic);
+    if (!$id) {
+        echo "Creating libgen series \"$title\"...";
+        $id = lgpCreateSeries($title, $metadata, $topic);
+        if ($id) echo " $id.\n";
+    }
+    $cache[$key] = $id;
+    return $id;
+}
+
+function lgpCreateSeries($title, $metadata, $topic = 'a') {
+    $libgen_host = LIBGEN_HOST;
+    $lgp_session_id = LIBGEN_SESSIONID;
+    $headers = [
+        'Cookie: phpbb3_9na6l_u=1602; phpbb3_9na6l_k=; phpbb3_9na6l_sid=' . LIBGEN_SESSIONID,
+    ];
+
+    $formHtml = httpGet("https://$libgen_host/librarian.php?action=add&object=s", null, $headers);
+    if (empty($formHtml) || !str_contains($formHtml, 'Add new series')) {
+        throw new UploadException("could not load series form");
+    }
+    $formData = getFormValues($formHtml);
+    $formData['action'] = 'addreg';
+    $formData['object'] = 's';
+    $formData['title'] = $title;
+    $formData['libgen_topic'] = $topic;
+    $formData['type'] = lgpSeriesType($topic);
+    if (!empty($metadata['publisher'])) {
+        $formData['publisher'] = $metadata['publisher'];
+    }
+    $issns = cleanIssns($metadata['issn'] ?? []);
+    for ($i = 1; $i <= count($issns); $i++) {
+        $formData["new_{$i}_501"] = $issns[$i - 1];
+    }
+
+    $response = httpGet("https://$libgen_host/librarian.php", $formData, $headers);
+    if (preg_match('~series\.php\?id=([0-9]+)~', $response, $matches)) {
+        return $matches[1];
+    }
+    if (preg_match_all('~<div class="alert alert-danger" role="alert">([^<]*)</div>~', $response, $matches)) {
+        foreach ($matches[1] as $error) {
+            if (!str_contains($error, 'does not support JavaScript')) {
+                throw new UploadException("could not create series: $error");
+            }
+        }
+    }
+
+    return lgpFindSeriesId($title, $topic);
 }
 
 function lgpLoadFtpPath($ftp_path, $metadata) {
@@ -161,7 +314,13 @@ function upload($path, $metadata) {
         }
     }
 
-    if (!$zlib || (defined('LIBGEN_UPLOAD') && LIBGEN_UPLOAD)) {
+    $can_upload_libgen = true;
+    if (isArticleMetadata($metadata) && empty($metadata['series']) && empty($metadata['journal'])) {
+        echo "No journal/series name found; skipping libgen.\n";
+        $can_upload_libgen = false;
+    }
+
+    if ($can_upload_libgen && (!$zlib || (defined('LIBGEN_UPLOAD') && LIBGEN_UPLOAD))) {
         if (filesize($path) < 10000000) {
             echo "Web upload to libgen...";
             try {
