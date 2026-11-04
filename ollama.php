@@ -97,7 +97,6 @@ function ollamaMetadata($path, $metadata=[], $with_cover=true, $document_type=nu
     }
 
     $prompt = "You are an expert metadata extraction system. Your task is to extract the document's metadata from the provided text. For all fields except document_type, language and category, use a literal copy of text found in the input, do not hallucinate or infer. The title and authors fields are most critical. If any requested value is not found or seems incorrect or illegible, omit it from the output. Return the output in the requested JSON format. If a value is all upper case, convert it to title case. Return a JSON object with these keys:
-$type_hint
     document_type: one of \"book\", \"article\", \"journal\", \"magazine\". Use \"article\" for a single scientific or scholarly article/paper. Use \"journal\" for a complete issue or volume of a journal. Use \"magazine\" for a complete issue of a magazine or a popular periodical.
     title: title of the book or article, including the subtitle if it has one. For a complete journal or magazine issue, use a descriptive title such as \"Volume 11, Number 1\" if the issue has no separate title$examples[title];
     authors: string with semicolon-separated list of author names, without titles or place names$examples[authors];
@@ -114,7 +113,7 @@ $type_hint
     language: the English name for the language this document is written in$examples[language].
     category: one of $topics_text
 
-Below is the text from the first pages of the document. Extract the following fields literally from the text: title, authors, series, volume, issue, edition, first_page, last_page, doi, issn, publisher and year. Infer the values for document_type, language and category.
+Below is the text from the first pages of the document. Extract the following fields literally from the text: title, authors, series, volume, issue, edition, first_page, last_page, doi, issn, publisher and year. Infer the values for document_type, language and category. $type_hint
 
 ## File: $filename
 

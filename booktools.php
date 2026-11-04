@@ -747,15 +747,6 @@ function pdfToText($path) {
         unlink($back);
     }
 
-    // read config.txt
-    $configtxt = readConfigTxt($path);
-    if (!empty($configtxt['isbn'])) {
-        $text .= "\n{$configtxt['isbn']}\n";
-    }
-    if (!empty($configtxt['title'])) {
-        $text .= "\n{$configtxt['title']}\n";
-    }
-
     return $text;
 }
 
@@ -1335,6 +1326,7 @@ function hasIsbn($isbn) {
 }
 
 function isRequested($isbn) {
+    if (!file_exists('libgen_requested.txt')) libgenGetRequestedBooks();
     return binarySearch('libgen_requested.txt', $isbn, 14, 13) || binarySearch('zlib_requested.txt', $isbn, 14, 13);
 }
 
@@ -1910,3 +1902,24 @@ function hasBookExtension($path) {
     }
     return false;
 }
+
+function getIsbnFromFile($path) {
+    $isbns = grepIsbns($path);
+
+    $txt = fileToText($path);
+    $isbns = mergeIsbnsArray($isbns, grepIsbns($txt));
+
+    if (count($isbns) > 5) {
+        if (function_exists('ollamaIsbns')) {
+            echo "Found " . count($isbns) . " ISBNs, asking LLM for ISBNs... ";
+            $isbns = ollamaIsbns($path) ?? [];
+            $isbns = array_map('cleanISBN', $isbns);
+            echo count($isbns) . " ISBNs.\n";
+        } else {
+            echo "Found " . count($isbns) . " ISBNs, not using them.\n";
+            return [];
+        }
+    }
+    return $isbns;
+}
+

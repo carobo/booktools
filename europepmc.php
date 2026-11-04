@@ -26,6 +26,11 @@
  *
  * The script keeps its progress in .europepmc-state.json inside the output
  * directory.  Records that were already handled are skipped on later runs.
+ *
+ * For every downloaded PDF, a sidecar file with the same basename and the
+ * extension .txt.gz is written.  It contains the text of the first page
+ * extracted with pdftotext, followed by the JSON of the full Europe PMC
+ * record.
  */
 
 const EUROPEPMC_SEARCH_URL = 'https://www.ebi.ac.uk/europepmc/webservices/rest/search';
@@ -50,6 +55,13 @@ $lock = epmcAcquireLock("$stateFile.lock");
 if (!$lock) {
     fwrite(STDERR, "Another europepmc.php run is already using $stateFile\n");
     exit(1);
+}
+
+if ($options['backfill']) {
+    epmcBackfillSidecars($options, $outDir, $state);
+    flock($lock, LOCK_UN);
+    fclose($lock);
+    exit(0);
 }
 
 $until = $options['until'] ?: gmdate('Y-m-d');
@@ -197,15 +209,17 @@ function epmcParseOptions(array $argv): array
         'cookie' => '',
         'user-agent' => '',
         'retry-failed' => false,
+        'backfill' => false,
         'dry-run' => false,
         'list' => false,
         'verbose' => false,
         'help' => false,
+        'max-set' => false,
     ];
 
     $long = [
         'query:', 'days:', 'since:', 'until:', 'lookback:', 'max:', 'out:',
-        'state:', 'email:', 'cookie:', 'user-agent:', 'retry-failed',
+        'state:', 'email:', 'cookie:', 'user-agent:', 'retry-failed', 'backfill',
         'dry-run', 'list', 'verbose', 'help',
     ];
 
@@ -215,6 +229,7 @@ function epmcParseOptions(array $argv): array
     }
 
     $opts = $defaults;
+    $opts['max-set'] = isset($parsed['max']);
     foreach ($parsed as $name => $value) {
         $name = str_replace('_', '-', $name);
         if (array_key_exists($name, $opts)) {
@@ -258,6 +273,8 @@ Options:
   --cookie STRING     Optional Cookie header for Cloudflare-protected downloads
   --user-agent STRING Override the HTTP User-Agent
   --retry-failed      Retry records that previously failed
+  --backfill          Write/update sidecars for PDFs already in the output directory
+                      (--max N limits the number processed; default all)
   --list              List what would be downloaded; do not download or save state
   --dry-run           Same as --list
   --verbose           Print extra diagnostics
@@ -270,6 +287,10 @@ PDF sources tried for each record:
   4. The PDF URL returned by the Europe PMC fulltextRepo metadata endpoint
   5. The open-access PDF ZIP from https://ftp.ebi.ac.uk/pub/databases/pmc/pdf/OA/
   6. Unpaywall, if --email was supplied
+
+For each downloaded paper, a gzip-compressed sidecar with the same basename
+and the extension .txt.gz is written next to the PDF.  It contains the first
+page of text (extracted with pdftotext) followed by the record as JSON.
 
 HELP;
 }
@@ -361,6 +382,9 @@ function epmcHandleRecord(array $record, array $options, array &$state, string $
 
     if (is_file($file) && epmcIsPdf($file)) {
         epmcLog($options, "Already present: $file");
+        if (!is_file(epmcSidecarPath($file))) {
+            epmcWriteSidecar($file, $record, $options);
+        }
         $state['seen'][$key] = ['file' => $file, 'at' => gmdate('c')];
         unset($state['failed'][$key]);
         return 'seen';
@@ -384,6 +408,7 @@ function epmcHandleRecord(array $record, array $options, array &$state, string $
     foreach ($urls as $url) {
         $error = epmcDownloadPdf($url, $file, $options);
         if ($error === null) {
+            epmcWriteSidecar($file, $record, $options);
             epmcRecordSuccess($state, $key, $file, $record);
             echo "  downloaded via $url\n";
             return 'downloaded';
@@ -399,6 +424,7 @@ function epmcHandleRecord(array $record, array $options, array &$state, string $
         }
 
         if ($error === null) {
+            epmcWriteSidecar($file, $record, $options);
             epmcRecordSuccess($state, $key, $file, $record);
             echo "  downloaded via {$source['url']}\n";
             return 'downloaded';
@@ -427,6 +453,276 @@ function epmcRecordSuccess(array &$state, string $key, string $file, array $reco
         'at' => gmdate('c'),
     ];
     unset($state['failed'][$key]);
+}
+
+function epmcSidecarPath(string $pdfFile): string
+{
+    return preg_replace('~\.pdf$~i', '', $pdfFile) . '.txt.gz';
+}
+
+/**
+ * Write a gzip-compressed sidecar next to the PDF.  Like booktools.php's
+ * fileToText()/pdfToText() convention, the text lives in a .txt.gz file, but
+ * here it is the first page only and is followed by the full record as JSON.
+ */
+function epmcWriteSidecar(string $pdfFile, array $record, array $options): void
+{
+    $target = epmcSidecarPath($pdfFile);
+    $text = epmcFirstPageText($pdfFile);
+
+    $content = $text;
+    if ($content !== '' && !str_ends_with($content, "\n")) {
+        $content .= "\n";
+    }
+    if ($content !== '') {
+        $content .= "\n";
+    }
+    $content .= epmcRecordJson($record) . "\n";
+
+    epmcWriteGzipFile($target, $content, $options);
+}
+
+function epmcRecordJson(array $record): string
+{
+    $json = json_encode($record);
+    if ($json === false) {
+        $json = json_encode(epmcCompactRecord($record)) ?: '{}';
+    }
+    return $json;
+}
+
+function epmcWriteGzipFile(string $target, string $content, array $options): bool
+{
+    $compressed = gzencode($content);
+    if ($compressed === false) {
+        epmcLog($options, "Warning: cannot gzip $target");
+        return false;
+    }
+
+    $tmp = $target . '.tmp.' . getmypid();
+    if (file_put_contents($tmp, $compressed) === false || !rename($tmp, $target)) {
+        @unlink($tmp);
+        epmcLog($options, "Warning: cannot write $target");
+        return false;
+    }
+
+    epmcLog($options, "Wrote $target");
+    return true;
+}
+
+function epmcFirstPageText(string $pdfFile): string
+{
+    // pdftotext is the same tool used by pdfToText() in booktools.php.
+    $cmd = 'pdftotext -f 1 -l 1 -nodiag ' . escapeshellarg($pdfFile) . ' - 2>/dev/null';
+    $text = @shell_exec($cmd);
+    if (!is_string($text)) {
+        return '';
+    }
+
+    // Keep the sidecar small even if the first page contains a lot of text.
+    if (strlen($text) > 65536) {
+        $text = mb_strcut($text, 0, 65536, 'UTF-8');
+    }
+
+    return trim($text);
+}
+
+/**
+ * Retroactively add record JSON to sidecars of PDFs that were downloaded
+ * before sidecars were introduced.  Old text-only .txt.gz files keep their
+ * text and get the JSON appended; missing sidecars are created from the PDF.
+ */
+function epmcBackfillSidecars(array $options, string $outDir, array $state): void
+{
+    $limit = $options['max-set'] ? $options['max'] : 0;
+
+    $keysByBase = [];
+    foreach ($state['seen'] ?? [] as $key => $entry) {
+        if (!empty($entry['file'])) {
+            $keysByBase[basename($entry['file'])] = (string) $key;
+        }
+    }
+
+    $names = @scandir($outDir);
+    if (!is_array($names)) {
+        fwrite(STDERR, "Cannot read output directory: $outDir\n");
+        return;
+    }
+
+    $pdfs = [];
+    foreach ($names as $name) {
+        if ($name === '.' || $name === '..') {
+            continue;
+        }
+        $path = $outDir . '/' . $name;
+        if (is_file($path) && preg_match('~\.pdf$~i', $name)) {
+            $pdfs[] = $path;
+        }
+    }
+    sort($pdfs);
+
+    $pending = [];
+    $complete = 0;
+    foreach ($pdfs as $pdf) {
+        if (!epmcIsPdf($pdf)) {
+            continue;
+        }
+
+        $sidecar = epmcSidecarPath($pdf);
+        if (is_file($sidecar) && epmcSidecarContainsRecord($sidecar)) {
+            $complete++;
+            continue;
+        }
+
+        $key = $keysByBase[basename($pdf)] ?? epmcKeyFromFileName(basename($pdf));
+        $pending[] = [
+            'pdf' => $pdf,
+            'sidecar' => $sidecar,
+            'key' => $key,
+            'append' => is_file($sidecar),
+        ];
+    }
+
+    if ($limit > 0) {
+        $pending = array_slice($pending, 0, $limit);
+    }
+
+    echo sprintf(
+        "Backfill: %d PDFs found, %d already complete, %d to process.\n",
+        count($pdfs),
+        $complete,
+        count($pending)
+    );
+
+    if (!$pending) {
+        return;
+    }
+
+    $byKey = [];
+    $noKey = 0;
+    foreach ($pending as $item) {
+        if ($item['key'] === null) {
+            $noKey++;
+            continue;
+        }
+        $byKey[$item['key']][] = $item;
+    }
+
+    $records = [];
+    $keys = array_keys($byKey);
+    foreach (array_chunk($keys, 50) as $chunk) {
+        $query = implode(' OR ', array_map('epmcKeyQuery', $chunk));
+        $url = EUROPEPMC_SEARCH_URL . '?' . http_build_query([
+            'query' => $query,
+            'format' => 'json',
+            'resultType' => 'core',
+            'pageSize' => 100,
+        ]);
+
+        $data = epmcGetJson($url, $options);
+        if ($data !== null) {
+            foreach ($data['resultList']['result'] ?? [] as $record) {
+                $key = epmcRecordKey($record);
+                if ($key !== null) {
+                    $records[$key] = $record;
+                }
+            }
+        } else {
+            epmcLog($options, 'Cannot fetch records for a backfill batch.');
+        }
+
+        echo sprintf("  fetched records for %d/%d keys\n", count($records), count($keys));
+        usleep(1000000);
+    }
+
+    $written = 0;
+    $missing = $noKey;
+    foreach ($byKey as $key => $items) {
+        if (!isset($records[$key])) {
+            $missing += count($items);
+            continue;
+        }
+
+        foreach ($items as $item) {
+            if ($item['append']) {
+                epmcAppendSidecarRecord($item['sidecar'], $records[$key], $options);
+            } else {
+                epmcWriteSidecar($item['pdf'], $records[$key], $options);
+            }
+            $written++;
+        }
+    }
+
+    echo sprintf(
+        "Backfill done: %d sidecars written, %d skipped (record not found).\n",
+        $written,
+        $missing
+    );
+}
+
+function epmcSidecarContainsRecord(string $sidecar): bool
+{
+    $data = @gzdecode((string) @file_get_contents($sidecar));
+    if (!is_string($data)) {
+        return false;
+    }
+
+    $data = rtrim($data);
+    if ($data === '') {
+        return false;
+    }
+
+    $pos = strrpos($data, "\n");
+    $last = $pos === false ? $data : substr($data, $pos + 1);
+    return is_array(json_decode($last, true));
+}
+
+function epmcAppendSidecarRecord(string $sidecar, array $record, array $options): void
+{
+    $data = @gzdecode((string) @file_get_contents($sidecar));
+    if (!is_string($data)) {
+        // Unreadable sidecar: rebuild it from the PDF instead.
+        epmcWriteSidecar(preg_replace('~\.txt\.gz$~i', '.pdf', $sidecar), $record, $options);
+        return;
+    }
+
+    $content = rtrim($data) . "\n\n" . epmcRecordJson($record) . "\n";
+    epmcWriteGzipFile($sidecar, $content, $options);
+}
+
+function epmcKeyFromFileName(string $name): ?string
+{
+    if (preg_match('~^(PMC\d+)~', $name, $m)) {
+        return $m[1];
+    }
+    if (preg_match('~^PMID(\d+)~', $name, $m)) {
+        return 'PMID' . $m[1];
+    }
+    if (preg_match('~^DOI (.+?)(?: - |\.pdf$)~i', $name, $m)) {
+        return 'DOI:' . strtolower(trim($m[1]));
+    }
+    if (preg_match('~^EPMC (.+?)(?: - |\.pdf$)~i', $name, $m)) {
+        return 'EPMC:' . trim($m[1]);
+    }
+    return null;
+}
+
+function epmcKeyQuery(string $key): string
+{
+    if (str_starts_with($key, 'PMC')) {
+        return '(PMCID:' . $key . ')';
+    }
+    if (str_starts_with($key, 'PMID')) {
+        return '(EXT_ID:' . substr($key, 4) . ' AND SRC:MED)';
+    }
+    if (str_starts_with($key, 'DOI:')) {
+        $doi = str_replace(['\\', '"'], ['\\\\', '\\"'], substr($key, 4));
+        return '(DOI:"' . $doi . '")';
+    }
+    if (str_starts_with($key, 'EPMC:')) {
+        return '(EXT_ID:' . substr($key, 5) . ')';
+    }
+    return '(' . $key . ')';
 }
 
 function epmcRetryFailed(array $options, array &$state, string $stateFile, string $outDir, array &$stats): void
