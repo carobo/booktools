@@ -5,15 +5,17 @@
 require_once('lib.php');
 
 $base = $argv[1];
+echo "$base\n";
 
 $dir = getSiteDirectory($base);
 
 $existing = glob("$dir/*");
 if (!empty($existing)) {
-    die("Already downloaded\n");
+    echo "Already downloaded.\n";
+    return;
 }
 
-$response = httpGet("http://$base/interface-data/update");
+$response = httpGet("$base/interface-data/update");
 $update = json_decode($response, true);
 $libraries = array_keys($update['library_map']);
 
@@ -31,7 +33,7 @@ foreach ($libraries as $library) {
             "sort_order" => "desc",
             "vl" => "",
         ];
-        $response = httpGet("http://$base/interface-data/more-books?library_id=$library", json_encode($request));
+        $response = httpGet("$base/interface-data/more-books?library_id=$library", json_encode($request));
         $books = json_decode($response, true);
         $total = $books['search_result']['total_num'];
 
@@ -46,15 +48,17 @@ foreach ($libraries as $library) {
             if (str_contains($metadata['title'], 'z-lib')) continue;
             if (str_contains($metadata['title'], 'Audiobook')) continue;
 
+            $requested = isValidISBN($isbn) && isRequested($isbn);
+
+            if (!$requested)
             try {
                 if (isValidISBN($isbn)) {
                     if (zlibHasIsbn($isbn) || inAnnasArchive($isbn)) {
                         continue;
                     }
-                } else {
-                    $search = cleanupSearchQuery($metadata['title'] . ' '. $metadata['author_sort']);
-                    if (inAnnasArchive($search)) continue;
                 }
+                $search = cleanupSearchQuery($metadata['title'] . ' '. $metadata['author_sort']);
+                if (inAnnasArchive($search)) continue;
             } catch (Exception $e) {
                 // pass
             }
@@ -64,7 +68,7 @@ foreach ($libraries as $library) {
                 $ext = strtolower($format);
 
                 $filename = createFileName($id, $isbn, $metadata['title'], $metadata['authors'], $ext);
-                $url = "http://$base/get/$format/$id/$library";
+                $url = "$base/get/$format/$id/$library";
 
                 if (file_exists("$dir/$filename")
                     || file_exists(replace_extension("$dir/$filename", "txt"))
