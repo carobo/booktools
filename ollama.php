@@ -25,29 +25,44 @@ function ollamaQuery($prompt, $images=[]) {
     $ollama_url = 'http://localhost:9931/v1/chat/completions';
     $data = [
         'model' => 'ministral-3:14b',
-        'keep_alive' => -1,
         'messages' => [
             ['role' => 'system', 'content' => $system],
             ['role' => 'user', 'content' => $userContent],
         ],
-        'images' => $images,
         'stream' => false,
-        'options' => [
-            'temperature' => 0.1,
-            // 'top_p' => 0.1,
-        ],
+        'temperature' => 0.1,
     ];
 
-    static $ch = curl_init($ollama_url);
+    static $ch = null;
+    if ($ch === null) {
+        $ch = curl_init($ollama_url);
+    }
     curl_setopt($ch, CURLOPT_TIMEOUT, TIMEOUT);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    // llama-server returns 413 for large bodies sent as
+    // application/x-www-form-urlencoded, which is curl's default for
+    // string POSTFIELDS. Always send JSON.
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
 
     // Execute the request
     $response = curl_exec($ch);
+    $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    if ($response === false || $status !== 200) {
+        fwrite(STDERR, "LLM request failed (HTTP $status): "
+            . (curl_error($ch) ?: substr((string)$response, 0, 500)) . "\n");
+        return null;
+    }
+
     $api_response = json_decode($response, true);
-    return $api_response['choices'][0]['message']['content'];
+    $content = $api_response['choices'][0]['message']['content'] ?? null;
+    if (!is_string($content)) {
+        fwrite(STDERR, "LLM response has no content: " . substr($response, 0, 500) . "\n");
+        return null;
+    }
+    return $content;
 }
 
 function ollamaMetadata($path, $metadata=[], $with_cover=true, $document_type=null) {
@@ -127,7 +142,7 @@ Output a JSON object with document_type, title, authors, series, volume, issue, 
     $response = ollamaQuery($prompt, $images);
 
     $model_response = null;
-    if (preg_match('~{.*}~s', $response, $matches)) {
+    if (is_string($response) && preg_match('~{.*}~s', $response, $matches)) {
         $decoded = json_decode($matches[0], true);
         if (is_array($decoded)) {
             foreach ($decoded as $key => $value) {
@@ -178,6 +193,9 @@ $text
 Output only the ISBNs that apply to this book.";
 
     $response = ollamaQuery($prompt);
+    if ($response === null) {
+        return null;
+    }
 
     if (preg_match('~\[.*\]~s', $response, $matches)) {
         $model_response = json_decode($matches[0], true);
@@ -254,7 +272,7 @@ Output only a JSON object like {\"document_type\": \"article\"}.";
 
     $response = ollamaQuery($prompt, $images);
 
-    if (preg_match('~{.*}~s', $response, $matches)) {
+    if (is_string($response) && preg_match('~{.*}~s', $response, $matches)) {
         $model_response = json_decode($matches[0], true);
         if (is_array($model_response)) {
             $type = normalizeDocumentType($model_response['document_type'] ?? null);
@@ -298,7 +316,10 @@ $metadata_json
 $text
 ```";
 
-    $response = trim(ollamaQuery($prompt));
+    $response = trim((string) ollamaQuery($prompt));
+    if ($response === '') {
+        return null;
+    }
     $response = trim(explode("\n", $response)[0]);
     $response = preg_replace('~^(journal|series)\s*[:=]\s*~i', '', $response);
     $response = trim($response, " \t\n\r\0\x0B\"'`");
