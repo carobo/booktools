@@ -2,7 +2,7 @@
 
 // Crawl calibre content-server
 
-require_once('lib.php');
+require_once('booktools.php');
 
 $base = $argv[1];
 

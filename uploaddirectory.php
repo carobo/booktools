@@ -1,11 +1,6 @@
 <?php
 
-require_once('config.php');
 require_once('booktools.php');
-require_once('ollama.php');
-require_once('libgenupload.php');
-require_once('zlibupload.php');
-require_once('vendor/autoload.php');
 
 function done_with_file($path) {
     global $done_file;

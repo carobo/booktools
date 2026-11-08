@@ -1,5 +1,11 @@
 <?php
 
+require_once('config.php');
+require_once('ollama.php');
+require_once('libgenupload.php');
+require_once('zlibupload.php');
+require_once('vendor/autoload.php');
+
 class DownloadException extends Exception { }
 class DecryptException extends DownloadException { }
 class FileInputOutputException extends Exception { }

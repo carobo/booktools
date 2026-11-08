@@ -1,5 +1,5 @@
 <?php
-require_once('lib.php');
+require_once('booktools.php');
 
 $url_base = rtrim($argv[1], '/');
 echo "$url_base\n";

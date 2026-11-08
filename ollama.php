@@ -1,6 +1,6 @@
 <?php
 
-require_once('lib.php');
+require_once('booktools.php');
 
 function ollamaQuery($prompt, $images=[]) {
     $userContent = $prompt;
@@ -51,9 +51,7 @@ function ollamaQuery($prompt, $images=[]) {
     $response = curl_exec($ch);
     $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     if ($response === false || $status !== 200) {
-        fwrite(STDERR, "LLM request failed (HTTP $status): "
-            . (curl_error($ch) ?: substr((string)$response, 0, 500)) . "\n");
-        return null;
+        throw new UnexpectedResponseException($status);
     }
 
     $api_response = json_decode($response, true);
