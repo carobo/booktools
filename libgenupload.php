@@ -51,7 +51,18 @@ function lgpClearIssueOnlyFields(&$formData, $metadata) {
     if (isset($formData['new_1_901'])) {
         $formData['new_1_901'] = '';
     }
-    $formData['new_1_505'] = '';
+}
+
+function lgpClearAutoFilledIsbns(&$formData) {
+    // Libgen pre-fills ISBN fields by extracting numbers from the uploaded
+    // file. It can pick up any EAN-13 barcode, including ones that do not start
+    // with 978/979. Such values pass the HTML pattern but fail Libgen's
+    // server-side ISBN check with "value not regexp checks".
+    foreach (array_keys($formData) as $key) {
+        if (preg_match('~^new_[0-9]+_505(?:_(?:add1|dstart|dend))?$~', $key)) {
+            $formData[$key] = '';
+        }
+    }
 }
 
 function lgpFormSubmitMetadata($formHtml, $metadata) {
@@ -82,6 +93,7 @@ function lgpFormSubmitMetadata($formHtml, $metadata) {
     $formData['type'] = lgpEditionType($metadata);
 
     lgpClearIssueOnlyFields($formData, $metadata);
+    lgpClearAutoFilledIsbns($formData);
     $isbns = mergeIsbnsArray($metadata['isbn']);
     for ($i = 1; $i <= count($isbns); $i++) {
         $formData["new_{$i}_505"] = $isbns[$i- 1];
